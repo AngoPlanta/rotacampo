@@ -1,8 +1,9 @@
+import os
 import requests
 
-# 1. Suas credenciais
+# 1. Credenciais seguras
 usuario = "hackathon_nasa_space_apps_almeidamundundi_garcia"
-senha = "COLOQUE_SUA_SENHA_AQUI"
+senha = os.environ["METEOMATICS_SENHA"]
 
 # 2. Local (Huambo - Planalto Central) e período (últimos 12 meses)
 lat, lon = -12.7761, 15.7392
