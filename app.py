@@ -8,17 +8,128 @@ from streamlit.components.v1 import html
 st.set_page_config(
     page_title="RotaCampo — AngoPlanta | NASA Space Apps",
     page_icon="🌱",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Cabeçalho principal
-st.title("🌱 RotaCampo — Apoio à Decisão Agrícola no Planalto Central")
-st.markdown(
-    "**Equipe AngoPlanta** | *NASA Space Apps Challenge — Mudança de rumo: Adaptando fazendas com dados da NASA & Meteomatics*"
-)
-st.divider()
+# Estilo visual moderno (AgTech Clean UI)
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 
-# Carregamento e tratamento do cache climático real da Meteomatics
+    html, body, [class*="css"] {
+        font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+
+    .stApp {
+        background-color: #f6f8f6;
+        color: #1b2e22;
+    }
+
+    /* Banner Hero */
+    .hero-box {
+        background: linear-gradient(135deg, #14452f 0%, #1e6b47 60%, #2d8a5b 100%);
+        padding: 2rem 2.2rem;
+        border-radius: 18px;
+        color: #ffffff;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 10px 25px rgba(20, 69, 47, 0.15);
+    }
+    .hero-badge {
+        display: inline-block;
+        background: rgba(255, 255, 255, 0.16);
+        padding: 0.3rem 0.85rem;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        margin-bottom: 0.75rem;
+    }
+    .hero-title {
+        font-size: 2.1rem;
+        font-weight: 700;
+        margin: 0 0 0.4rem 0;
+        line-height: 1.2;
+    }
+    .hero-sub {
+        font-size: 1rem;
+        color: #dcf2e6;
+        margin: 0;
+    }
+
+    /* Cards de métricas */
+    .kpi-card {
+        background: #ffffff;
+        border: 1px solid #e1ebe4;
+        border-radius: 14px;
+        padding: 1.1rem 1.25rem;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+    }
+    .kpi-label {
+        font-size: 0.8rem;
+        color: #5b7264;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .kpi-value {
+        font-size: 1.55rem;
+        font-weight: 700;
+        color: #14452f;
+        margin: 0.25rem 0;
+    }
+    .kpi-delta {
+        font-size: 0.82rem;
+        color: #2d8a5b;
+        font-weight: 500;
+    }
+
+    /* Cards dos ciclos de rotação */
+    .cycle-card {
+        background: #ffffff;
+        border-left: 5px solid #2d8a5b;
+        border-radius: 14px;
+        padding: 1.25rem 1.4rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.04);
+    }
+    .cycle-tag {
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: #2d8a5b;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .cycle-crop {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: #14452f;
+        margin: 0.2rem 0 0.5rem 0;
+    }
+    .cycle-desc {
+        font-size: 0.94rem;
+        color: #3d5245;
+        line-height: 1.5;
+        margin: 0;
+    }
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background-color: #ffffff;
+        border-right: 1px solid #e1ebe4;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Hero Header
+st.markdown("""
+<div class="hero-box">
+    <div class="hero-badge">🛰️ NASA SPACE APPS CHALLENGE • EQUIPE ANGOPLANTA</div>
+    <h1 class="hero-title">🌱 RotaCampo — Inteligência Agrícola no Planalto Central</h1>
+    <p class="hero-sub">Planejamento de rotação de culturas orientado por dados climáticos e de umidade do solo (NASA & Meteomatics) para o Huambo, Angola.</p>
+</div>
+""", unsafe_allow_html=True)
+
 @st.cache_data
 def carregar_dados():
     df = pd.read_csv("cache_huambo.csv", sep=";")
@@ -32,121 +143,148 @@ def carregar_dados():
 
 df = carregar_dados()
 
-# Barra lateral: Perfil e Prioridades do Agricultor
-st.sidebar.header("🚜 Perfil da Propriedade (Huambo)")
+# Sidebar
+st.sidebar.markdown("### 🚜 Configurar Talhão")
+st.sidebar.caption("Ajuste os parâmetros da lavra para simular a melhor rotação.")
 area_ha = st.sidebar.slider("Área cultivável (hectares)", 0.5, 50.0, 2.5, step=0.5)
 cultura_anterior = st.sidebar.selectbox(
-    "Última cultura colhida na lavra:",
+    "Última cultura colhida:",
     ["Milho (Cereal - consome muito nitrogênio)",
      "Feijão-vulgar (Leguminosa - fixa nitrogênio)",
      "Batata-rena (Tubérculo - exige solo solto)",
      "Solo em pousio / Primeira lavra"]
 )
 prioridade = st.sidebar.radio(
-    "Qual é a sua prioridade principal para os próximos 3 ciclos?",
+    "Objetivo principal para os próximos 3 ciclos:",
     [
         "💰 Maximizar retorno financeiro rápido",
-        "🌿 Recuperar a fertilidade e umidade do solo",
-        "🌽 Segurança alimentar familiar e resiliência à seca"
+        "🌿 Recuperar fertilidade e umidade do solo",
+        "🌽 Segurança alimentar e resiliência à seca"
     ]
 )
-irrigacao = st.sidebar.checkbox("Possui acesso à irrigação suplementar no cacimbo?", value=False)
+irrigacao = st.sidebar.checkbox("Possui irrigação suplementar no cacimbo?", value=False)
 
-# Indicadores-chave do ciclo climático (Meteomatics / NASA)
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Localização Monitorada", "Huambo (-12.78°, 15.74°)", "Planalto Central")
-col2.metric("Pico de Temperatura Máx.", f"{df['Temp_Max_C'].max():.1f} °C", "Setembro (Risco Térmico)")
-col3.metric("Pico de Precipitação", f"{df['Chuva_mm'].max():.1f} mm", "Outubro (Época Chuvosa)")
-col4.metric("Umidade Média do Solo (-5cm)", f"{df['Umidade_Solo_Idx'].mean():.2f} idx", "Dados Meteomatics/NASA")
+# KPIs modernos
+c1, c2, c3, c4 = st.columns(4)
+with c1:
+    st.markdown("""
+    <div class="kpi-card">
+        <div class="kpi-label">📍 Região Monitorada</div>
+        <div class="kpi-value">Huambo</div>
+        <div class="kpi-delta">-12.78° S, 15.74° E • Planalto Central</div>
+    </div>""", unsafe_allow_html=True)
+with c2:
+    st.markdown(f"""
+    <div class="kpi-card">
+        <div class="kpi-label">🌡️ Pico Térmico</div>
+        <div class="kpi-value">{df['Temp_Max_C'].max():.1f} °C</div>
+        <div class="kpi-delta">Setembro • Alerta de evaporação</div>
+    </div>""", unsafe_allow_html=True)
+with c3:
+    st.markdown(f"""
+    <div class="kpi-card">
+        <div class="kpi-label">🌧️ Máxima de Chuva</div>
+        <div class="kpi-value">{df['Chuva_mm'].max():.1f} mm</div>
+        <div class="kpi-delta">Outubro • Abertura da época chuvosa</div>
+    </div>""", unsafe_allow_html=True)
+with c4:
+    st.markdown(f"""
+    <div class="kpi-card">
+        <div class="kpi-label">💧 Umidade Solo (-5cm)</div>
+        <div class="kpi-value">{df['Umidade_Solo_Idx'].mean():.2f} idx</div>
+        <div class="kpi-delta">Média anual • Satélite Meteomatics</div>
+    </div>""", unsafe_allow_html=True)
 
-st.divider()
+st.markdown("<br>", unsafe_allow_html=True)
 
-# Abas principais da aplicação
 aba1, aba2, aba3 = st.tabs([
-    "🧭 Plano de Rotação Recomendado",
-    "📊 Monitoramento Climático & Solo (Dados Reais)",
-    "🗺️ Mapa da Região & Talhão"
+    "🧭 Plano de Rotação (3 Ciclos)",
+    "📊 Clima & Umidade do Solo",
+    "🗺️ Mapa da Estação Virtual"
 ])
 
 with aba1:
-    st.subheader("Estratégia Inteligente de Rotação em 3 Ciclos")
-
-    # Diagnóstico do solo com base na última cultura
     if "Milho" in cultura_anterior:
-        diag_solo = "⚠️ **Alerta de Nitrogênio:** O milho extraiu grande parte do nitrogênio superficial. É essencial iniciar com uma leguminosa fixadora antes de plantar outra cultura exigente."
+        st.warning("⚠️ **Diagnóstico do Solo:** O milho consumiu bastante nitrogênio superficial. Comece com uma leguminosa fixadora antes de repetir culturas exigentes.")
     elif "Feijão" in cultura_anterior:
-        diag_solo = "✅ **Solo Enriquecido:** O feijão deixou nitrogênio orgânico disponível. Excelente momento para culturas de alta demanda nutricional como milho ou batata-rena."
+        st.success("✅ **Diagnóstico do Solo:** O feijão enriqueceu o solo com nitrogênio orgânico. Momento ideal para milho ou batata-rena.")
     elif "Batata" in cultura_anterior:
-        diag_solo = "ℹ️ **Estrutura Mobilizada:** A colheita da batata revolveu o solo. Recomenda-se cobertura vegetal ou leguminosa para proteger contra erosão nas chuvas intensas."
+        st.info("ℹ️ **Diagnóstico do Solo:** Solo mobilizado pela colheita da batata. Priorize cobertura vegetal para evitar erosão nas chuvas.")
     else:
-        diag_solo = "🌱 **Solo em Repouso:** Boa oportunidade para iniciar com cultura rústica de abertura e incorporar matéria orgânica."
+        st.success("🌱 **Diagnóstico do Solo:** Solo em repouso, pronto para abertura com cultura rústica e incorporação de matéria orgânica.")
 
-    st.info(diag_solo)
-
-    # Lógica agronômica cruzando prioridade + irrigação + dados de umidade do Huambo
     if "financeiro" in prioridade:
-        plano = [
-            {"Ciclo": "Ciclo 1 (Out–Jan | Chuvas)", "Cultura": "Feijão-vulgar (Variedade precoce)", "Justificativa Climática": "Aproveita o início das chuvas (68.7 mm) e umidade ideal do solo (0.95 idx), recuperando nitrogênio e gerando caixa em 75 dias."},
-            {"Ciclo": "Ciclo 2 (Fev–Mai | Chuvas Tardias)", "Cultura": "Batata-rena", "Justificativa Climática": "Usa o nitrogênio fixado pelo feijão e o pico de umidade do solo em abril (1.11 idx), entregando alto valor comercial no mercado do Huambo."},
-            {"Ciclo": "Ciclo 3 (Jun–Set | Cacimbo)", "Cultura": "Hortícolas de ciclo curto (Repolho/Tomate)" if irrigacao else "Feijão-frade / Sorgo tolerante à seca", "Justificativa Climática": "Com umidade do solo caindo a 0.00 idx no cacimbo, " + ("a irrigação garante venda na entressafra." if irrigacao else "evita perda de safra sem depender de chuva.")}
+        ciclos = [
+            ("Ciclo 1 • Out–Jan (Chuvas)", "Feijão-vulgar (Variedade precoce)", "Aproveita o início das chuvas (68.7 mm) e umidade ideal do solo (0.95 idx), recuperando nitrogênio e gerando caixa em 75 dias."),
+            ("Ciclo 2 • Fev–Mai (Chuvas Tardias)", "Batata-rena", "Usa o nitrogênio fixado pelo feijão e o pico de umidade do solo em abril (1.11 idx), entregando alto valor comercial no mercado do Huambo."),
+            ("Ciclo 3 • Jun–Set (Cacimbo)", "Hortícolas (Repolho/Tomate)" if irrigacao else "Feijão-frade / Sorgo tolerante à seca", "Com umidade do solo caindo a 0.00 idx no cacimbo, " + ("a irrigação garante venda na entressafra." if irrigacao else "evita perda de safra sem depender de chuva."))
         ]
-        roi_estimado = f"+38% de margem líquida estimada em {area_ha} ha"
+        impacto = f"📈 Impacto estimado: +38% de margem líquida em {area_ha} ha"
     elif "fertilidade" in prioridade:
-        plano = [
-            {"Ciclo": "Ciclo 1 (Out–Jan | Chuvas)", "Cultura": "Soja ou Amendoim + Cobertura", "Justificativa Climática": "Fixação biológica intensa de nitrogênio e proteção contra escoamento superficial nas chuvas de outubro a janeiro."},
-            {"Ciclo": "Ciclo 2 (Fev–Mai | Chuvas Tardias)", "Cultura": "Milho consorciado com Mucuna-preta", "Justificativa Climática": "Aproveita a umidade elevada de fevereiro a abril (0.99–1.11 idx) para gerar biomassa e palhada protetora."},
-            {"Ciclo": "Ciclo 3 (Jun–Set | Cacimbo)", "Cultura": "Pousio coberto com palhada / Aveia-preta", "Justificativa Climática": "Mantém o solo coberto quando a temperatura chega a 30.0 °C em setembro, reduzindo a evaporação."}
+        ciclos = [
+            ("Ciclo 1 • Out–Jan (Chuvas)", "Soja ou Amendoim + Cobertura", "Fixação biológica intensa de nitrogênio e proteção contra escoamento superficial nas chuvas de outubro a janeiro."),
+            ("Ciclo 2 • Fev–Mai (Chuvas Tardias)", "Milho consorciado com Mucuna-preta", "Aproveita a umidade elevada de fevereiro a abril (0.99–1.11 idx) para gerar biomassa e palhada protetora."),
+            ("Ciclo 3 • Jun–Set (Cacimbo)", "Pousio coberto com palhada / Aveia-preta", "Mantém o solo protegido quando a temperatura chega a 30.0 °C em setembro, reduzindo a evaporação.")
         ]
-        roi_estimado = f"+45% de retenção de umidade e matéria orgânica em {area_ha} ha"
+        impacto = f"🌿 Impacto estimado: +45% de retenção de umidade e matéria orgânica em {area_ha} ha"
     else:
-        plano = [
-            {"Ciclo": "Ciclo 1 (Out–Jan | Chuvas)", "Cultura": "Milho + Feijão (Consórcio tradicional otimizado)", "Justificativa Climática": "Garante base calórica e proteica aproveitando a janela chuvosa estável (23–25 °C)."},
-            {"Ciclo": "Ciclo 2 (Fev–Mai | Chuvas Tardias)", "Cultura": "Batata-doce de polpa alaranjada", "Justificativa Climática": "Excelente adaptação ao Planalto Central e alta resistência a variações de umidade no fim das chuvas."},
-            {"Ciclo": "Ciclo 3 (Jun–Set | Cacimbo)", "Cultura": "Mandioca (colheita escalonada) / Feijão-frade", "Justificativa Climática": "Segurança alimentar garantida durante os 4 meses de precipitação zero (0.0 mm) no cacimbo."}
+        ciclos = [
+            ("Ciclo 1 • Out–Jan (Chuvas)", "Milho + Feijão (Consórcio otimizado)", "Garante base calórica e proteica aproveitando a janela chuvosa estável (23–25 °C)."),
+            ("Ciclo 2 • Fev–Mai (Chuvas Tardias)", "Batata-doce de polpa alaranjada", "Excelente adaptação ao Planalto Central e alta resistência a variações de umidade no fim das chuvas."),
+            ("Ciclo 3 • Jun–Set (Cacimbo)", "Mandioca (colheita escalonada) / Feijão-frade", "Segurança alimentar garantida durante os 4 meses de precipitação zero (0.0 mm) no cacimbo.")
         ]
-        roi_estimado = f"Abastecimento contínuo por 12 meses em {area_ha} ha"
+        impacto = f"🌽 Impacto estimado: Abastecimento alimentar contínuo por 12 meses em {area_ha} ha"
 
-    st.success(f"**Impacto Esperado da Estratégia:** {roi_estimado}")
-    st.table(pd.DataFrame(plano))
+    st.markdown(f"**{impacto}**")
+    for tag, cultura, desc in ciclos:
+        st.markdown(f"""
+        <div class="cycle-card">
+            <div class="cycle-tag">{tag}</div>
+            <div class="cycle-crop">{cultura}</div>
+            <p class="cycle-desc">{desc}</p>
+        </div>
+        """, unsafe_allow_html=True)
 
 with aba2:
-    st.subheader("Série Histórica Mensal — Huambo (Meteomatics API)")
-    c1, c2 = st.columns(2)
-
-    with c1:
+    g1, g2 = st.columns(2)
+    with g1:
         fig_chuva = px.bar(
             df, x="data", y="Chuva_mm",
-            title="Precipitação Mensal (mm) — Identificação da Seca",
+            title="Precipitação Mensal (mm) — Huambo",
             labels={"data": "Mês", "Chuva_mm": "Chuva (mm)"},
-            color_discrete_sequence=["#1f77b4"]
+            color_discrete_sequence=["#1e6b47"]
         )
+        fig_chuva.update_layout(plot_bgcolor="white", paper_bgcolor="white")
         st.plotly_chart(fig_chuva, use_container_width=True)
 
-    with c2:
+    with g2:
         fig_solo = go.Figure()
         fig_solo.add_trace(go.Scatter(
             x=df["data"], y=df["Umidade_Solo_Idx"],
             mode="lines+markers", name="Umidade do Solo (-5cm)",
-            line=dict(color="#2ca02c", width=3)
+            line=dict(color="#2d8a5b", width=3)
         ))
         fig_solo.add_trace(go.Scatter(
             x=df["data"], y=df["Temp_Max_C"] / 30.0,
-            mode="lines+markers", name="Índice Térmico Relativo (Temp/30°C)",
-            line=dict(color="#d62728", dash="dash")
+            mode="lines+markers", name="Estresse Térmico (Temp/30°C)",
+            line=dict(color="#d97706", dash="dash", width=2)
         ))
-        fig_solo.update_layout(title="Umidade do Solo (-5cm) vs. Estresse Térmico")
+        fig_solo.update_layout(
+            title="Umidade do Solo (-5cm) vs. Estresse Térmico",
+            plot_bgcolor="white", paper_bgcolor="white"
+        )
         st.plotly_chart(fig_solo, use_container_width=True)
 
-    with st.expander("Ver tabela bruta coletada da API Meteomatics"):
+    with st.expander("📄 Ver dados brutos da API Meteomatics (cache_huambo.csv)"):
         st.dataframe(df, use_container_width=True)
 
 with aba3:
-    st.subheader("Localização Agroclimática — Planalto Central (Huambo, Angola)")
+    st.markdown("#### 📍 Ponto de Monitoramento Agroclimático — Huambo (-12.7761, 15.7392)")
     mapa = folium.Map(location=[-12.7761, 15.7392], zoom_start=11)
     folium.Marker(
         [-12.7761, 15.7392],
-        popup="Ponto de Coleta Meteomatics / NASA — Huambo",
-        tooltip="Estação Virtual Huambo (-12.7761, 15.7392)",
+        popup="Estação Virtual Meteomatics / NASA — Huambo",
+        tooltip="Huambo (-12.7761, 15.7392)",
         icon=folium.Icon(color="green", icon="leaf")
     ).add_to(mapa)
-    html(mapa._repr_html_(), height=420)
+    html(mapa._repr_html_(), height=430)
