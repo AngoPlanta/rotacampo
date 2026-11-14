@@ -12,7 +12,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Banco de imagens reais das culturas locais do Planalto Central (Huambo)
 IMAGENS_CULTURAS = {
     "hero": "https://images.unsplash.com/photo-1500382017468-9049fed747ef?q=80&w=1600&auto=format&fit=crop",
     "milho": "https://images.unsplash.com/photo-1551754655-cd27e38d2076?q=80&w=900&auto=format&fit=crop",
@@ -32,13 +31,10 @@ st.markdown(f"""
     html, body, [class*="css"] {{
         font-family: 'Plus Jakarta Sans', sans-serif;
     }}
-
     .stApp {{
         background-color: #f4f7f4;
         color: #1b2e22;
     }}
-
-    /* Banner Hero com lavoura verde */
     .hero-banner {{
         background: linear-gradient(135deg, rgba(15, 56, 36, 0.88) 0%, rgba(28, 92, 58, 0.86) 100%),
                     url('{IMAGENS_CULTURAS["hero"]}');
@@ -73,8 +69,6 @@ st.markdown(f"""
         max-width: 820px;
         line-height: 1.5;
     }}
-
-    /* KPIs */
     .metric-box {{
         background: #ffffff;
         border: 1px solid #dcebe2;
@@ -100,10 +94,88 @@ st.markdown(f"""
         color: #2e7d32;
         font-weight: 600;
     }}
-
-    /* Card de texto do ciclo */
     .cycle-card-modern {{
         background: #ffffff;
         border-radius: 16px;
         border-left: 6px solid #2e7d32;
-        padding: 1.35rem 1.5
+        padding: 1.35rem 1.5rem;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.04);
+        height: 100%;
+    }}
+    .cycle-phase {{
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: #2e7d32;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }}
+    .cycle-name {{
+        font-size: 1.3rem;
+        font-weight: 700;
+        color: #103523;
+        margin: 0.25rem 0 0.5rem 0;
+    }}
+    .cycle-text {{
+        font-size: 0.95rem;
+        color: #3b5243;
+        line-height: 1.55;
+        margin: 0;
+    }}
+    section[data-testid="stSidebar"] {{
+        background-color: #ffffff;
+        border-right: 1px solid #dcebe2;
+    }}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="hero-banner">
+    <div class="hero-badge">🛰️ NASA SPACE APPS CHALLENGE • EQUIPE ANGOPLANTA</div>
+    <h1 class="hero-title">🌱 RotaCampo: Inteligência Agrícola para o Huambo</h1>
+    <p class="hero-sub">Planejamento visual de rotação de culturas adaptado aos agricultores do Planalto Central de Angola — unindo milho, feijão, batata-rena e mandioca aos dados reais de satélite da NASA & Meteomatics.</p>
+</div>
+""", unsafe_allow_html=True)
+
+@st.cache_data
+def carregar_dados():
+    df = pd.read_csv("cache_huambo.csv", sep=";")
+    df["data"] = pd.to_datetime(df["validdate"]).dt.strftime("%Y-%m")
+    df = df.rename(columns={
+        "t_max_2m_24h:C": "Temp_Max_C",
+        "precip_24h:mm": "Chuva_mm",
+        "soil_moisture_index_-5cm:idx": "Umidade_Solo_Idx"
+    })
+    return df
+
+df = carregar_dados()
+
+st.sidebar.markdown("### 🚜 Perfil da Sua Lavra")
+st.sidebar.caption("Escolha as características da sua terra no Huambo.")
+area_ha = st.sidebar.slider("Área cultivável (hectares)", 0.5, 50.0, 2.5, step=0.5)
+
+cultura_anterior = st.sidebar.selectbox(
+    "O que colheu por último nesta lavra?",
+    ["Milho (Cereal - consome muito nitrogênio)",
+     "Feijão-vulgar (Leguminosa - fixa nitrogênio)",
+     "Batata-rena (Tubérculo - exige solo solto)",
+     "Solo em pousio / Primeira abertura"]
+)
+
+prioridade = st.sidebar.radio(
+    "Qual é a sua prioridade agora?",
+    [
+        "💰 Maximizar lucro e venda rápida",
+        "🌿 Recuperar a força e umidade da terra",
+        "🌽 Garantir comida na mesa o ano todo"
+    ]
+)
+
+irrigacao = st.sidebar.checkbox("Tem acesso a rega/irrigação no cacimbo?", value=False)
+
+c1, c2, c3, c4 = st.columns(4)
+with c1:
+    st.markdown("""
+    <div class="metric-box">
+        <div class="metric-title">📍 Província</div>
+        <div class="metric-val">Huambo</div>
+        <div class="metric-desc">Planalto Central (-12.78°, 15.74
