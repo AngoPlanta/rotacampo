@@ -82,7 +82,7 @@ JANELAS = [
 COR_VERDE, COR_TERRA, COR_CINZA = "#21462d", "#9a4a26", "#7a6c5d"
 
 # ============================================================================
-# 2. ESTILO
+# 2. ESTILO (Corrigido para evitar sobreposições e alinhar blocos)
 # ============================================================================
 CSS = """
 <style>
@@ -90,7 +90,7 @@ CSS = """
 html, body, [class*="css"] { font-family: 'Public Sans', sans-serif; }
 h1, h2, h3, h4, .rc-display { font-family: 'Bricolage Grotesque', sans-serif !important; letter-spacing: -0.01em; }
 .stApp { background: #f6f3ee; color: #26211c; }
-.block-container { padding-top: 1.4rem; max-width: 1280px; }
+.block-container { padding-top: 1.4rem; padding-bottom: 3rem; max-width: 1280px; }
 section[data-testid="stSidebar"] { background: #fffdf9; border-right: 1px solid #e6dccd; }
 footer { visibility: hidden; }
 
@@ -137,13 +137,15 @@ footer { visibility: hidden; }
 .rc-ciclo .cultura { font-family: 'Bricolage Grotesque', sans-serif; font-size: 1.3rem; font-weight: 700; margin: .1rem 0 .3rem 0; }
 .rc-ciclo p { font-size: .9rem; color: #4a3f35; margin: 0; line-height: 1.5; }
 
-/* Quatro blocos */
-.rc-bloco { border-radius: 8px; padding: .85rem 1.05rem; height: 100%; font-size: .92rem; line-height: 1.5; color: #26211c; }
-.rc-bloco h5 { margin: 0 0 .4rem 0; font-family: 'Bricolage Grotesque', sans-serif; font-size: 1.02rem; }
+/* Quatro blocos - Ajustados para evitar sobreposições */
+.rc-bloco { border-radius: 8px; padding: 1rem 1.15rem; height: 100%; font-size: .92rem; line-height: 1.55; color: #26211c; margin-bottom: 0.8rem; }
+.rc-bloco h5 { margin: 0 0 .4rem 0; font-family: 'Bricolage Grotesque', sans-serif; font-size: 1.05rem; }
 .rc-bloco ul { margin: 0; padding-left: 1.1rem; }
-.rc-bloco li { margin-bottom: .25rem; }
-.rc-evid { background: #e6efe8; } .rc-ben { background: #eef3dc; }
-.rc-lac { background: #fbf0d6; } .rc-risc { background: #f6e1da; }
+.rc-bloco li { margin-bottom: .3rem; }
+.rc-evid { background: #e6efe8; border: 1px solid #cce2d1; } 
+.rc-ben { background: #eef3dc; border: 1px solid #dbe6b8; }
+.rc-lac { background: #fbf0d6; border: 1px solid #f2dec5; } 
+.rc-risc { background: #f6e1da; border: 1px solid #ebc6bc; }
 
 /* Diagnóstico */
 .rc-diag { background: #fffdf9; border: 1px solid #e6dccd; border-left: 5px solid #7a6c5d; border-radius: 0 8px 8px 0;
@@ -154,7 +156,7 @@ footer { visibility: hidden; }
 
 /* Explicação dos gráficos */
 .rc-explica { background: #fffdf9; border-left: 4px solid #21462d; padding: .75rem 1rem; font-size: .9rem;
-  line-height: 1.5; margin-top: .3rem; border-radius: 0 6px 6px 0; }
+  line-height: 1.5; margin-top: .6rem; margin-bottom: 1rem; border-radius: 0 6px 6px 0; }
 
 /* Telemóvel */
 @media (max-width: 640px) {
@@ -173,7 +175,6 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 
 def compact(texto):
-    """Junta o HTML numa só linha. O Markdown trata linhas indentadas ou em branco como código."""
     return " ".join(linha.strip() for linha in texto.splitlines() if linha.strip())
 
 
@@ -188,12 +189,11 @@ def mostrar(fig, altura=None):
         fig.update_layout(height=altura)
     try:
         st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
-    except TypeError:  # versões antigas do Streamlit
+    except TypeError:
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
 def tabela(dados):
-    """Mostra uma tabela à largura total, em versões novas e antigas do Streamlit."""
     try:
         st.dataframe(dados, width="stretch", hide_index=True)
     except TypeError:
@@ -220,7 +220,6 @@ html("""
 # 3. DADOS (leitura tolerante a falhas, com modo de demonstração)
 # ============================================================================
 def _dados_demo():
-    """Dados de DEMONSTRAÇÃO (não reais), só para a app nunca falhar."""
     return pd.DataFrame({
         "validdate": pd.date_range("2025-01-01", periods=12, freq="MS"),
         "Chuva_mm": [200, 190, 220, 120, 10, 0, 0, 3, 40, 110, 190, 210],
@@ -248,7 +247,6 @@ def _ler_csv():
 
 
 def _normalizar(bruto):
-    """Renomeia colunas, converte tipos e devolve None se os dados forem inutilizáveis."""
     mapa = {}
     for col in bruto.columns:
         nome = str(col).lower()
@@ -275,7 +273,6 @@ def _normalizar(bruto):
 
 @st.cache_data(show_spinner=False)
 def carregar_dados():
-    """Devolve (dados, é_demonstração). Lê só o cache local, nunca faz download ao vivo."""
     df_, demo = None, False
     try:
         bruto = _ler_csv()
@@ -291,8 +288,6 @@ def carregar_dados():
 
 
 def agrupar_estacoes(d):
-    """IA simples (k-means, 2 grupos) sobre chuva e humidade do solo.
-    Separa meses de chuva e de cacimbo sem usar um limiar fixo."""
     X = d[["Chuva_mm", "Umidade_Solo_Idx"]].apply(lambda c: c.fillna(c.median())).to_numpy(dtype=float)
     desvio = X.std(axis=0)
     desvio[desvio == 0] = 1
@@ -347,13 +342,12 @@ def indicadores_janela(janela, irrigacao):
     base = sub if cobertura > 0 else clima_mes
     chuva, umid, tmax = (float(np.nanmean(base[c])) if base[c].notna().any() else 0.5
                          for c in ("Chuva_mm", "Umidade_Solo_Idx", "Temp_Max_C"))
-    if irrigacao and umid < 0.6:  # a rega recupera a maior parte da falta de água
+    if irrigacao and umid < 0.6:
         umid = umid + (0.6 - umid) * 0.7
     return dict(chuva=chuva, umid=umid, tmax=tmax, cobertura=cobertura, dias=janela["dias"])
 
 
 def ajuste_janela(c, j):
-    """0–1: quanto a cultura se adapta à água, ao calor e à duração da janela."""
     secura = 1 - min(max(j["umid"] / 0.6, 0), 1)
     fit = 1 - secura * (1 - c["seca"] / 5)
     calor = min(max((j["tmax"] - 28) / 4, 0), 1)
@@ -379,7 +373,7 @@ def avaliar(seq, janelas, pesos):
     ciclos, medios = [], {k: [] for k in CRITERIOS}
     for i, nome in enumerate(seq):
         c, j = CULTURAS[nome], janelas[i]
-        anterior = seq[i - 1]  # a rotação repete-se todos os anos
+        anterior = seq[i - 1]
         fit = ajuste_janela(c, j)
         crit = criterios_cultura(c, fit)
         base = sum(pesos[k] * crit[k] for k in pesos) / soma
@@ -399,7 +393,6 @@ def avaliar(seq, janelas, pesos):
 
 
 def confianca(dist_km, janelas, fits_min, folga):
-    """Nível de confiança do resultado e os motivos, para mostrar ao agricultor."""
     cobertura = float(np.mean([j["cobertura"] for j in janelas]))
     n_meses = df[["ano", "mes"]].drop_duplicates().shape[0]
     pts = 0.35 * cobertura + 0.25 * min(n_meses / 12, 1)
@@ -429,7 +422,6 @@ def confianca(dist_km, janelas, fits_min, folga):
 
 
 def diagnostico_lavra(rot, janelas, irrigacao):
-    """Diagnóstico automático da rotação atual: azoto, ordem das culturas, erosão, cacimbo e diversidade."""
     itens = []
     cs = [CULTURAS[c] for c in rot]
     balanco = sum(c["n"] - c["exig_n"] for c in cs)
@@ -651,7 +643,6 @@ def montar_blocos(nome, e):
 
 
 with aba_cmp:
-    # Recomendação em uma frase
     melhor_nome, melhor_e = max(estrategias, key=lambda t: t[1]["score"])
     seq_melhor = " → ".join(melhor_e["seq"])
     if melhor_e is atual:
@@ -663,14 +654,12 @@ with aba_cmp:
                  f"({dif:+.0f} em relação à rotação atual). A confiança é {melhor_e['conf'].lower()}.")
     html(f'<div class="rc-resumo"><p>{frase}</p></div>')
 
-    # Diagnóstico automático da lavra
     st.markdown("#### Diagnóstico da sua lavra")
     st.caption(f"Com base na rotação que indicou: {' → '.join(rot_atual)}.")
     titulos_tipo = {"ok": "ok", "alerta": "alerta", "perigo": "perigo", "info": "info"}
     for tipo, titulo, texto in diagnostico_lavra(rot_atual, janelas, irrigacao):
         html(f'<div class="rc-diag {titulos_tipo[tipo]}"><b>{titulo}</b>{texto}</div>')
 
-    # Cartões das 3 estratégias
     st.markdown("#### Três estratégias lado a lado")
     cols = st.columns(3)
     for col, (nome, e) in zip(cols, estrategias):
@@ -730,6 +719,7 @@ with aba_cmp:
             b3, b4 = st.columns(2)
             b3.markdown(bloco("rc-lac", "Lacunas de informação", lac), unsafe_allow_html=True)
             b4.markdown(bloco("rc-risc", "Riscos: validar com técnico local", risc), unsafe_allow_html=True)
+            st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
             st.caption(f"Confiança {e['conf'].lower()} porque: " + "; ".join(e["conf_motivos"] or ["os dados cobrem bem o local"]) + ".")
 
     resumo = pd.DataFrame([{
