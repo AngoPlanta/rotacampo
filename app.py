@@ -1,27 +1,29 @@
 """
 RotaCampo · AngoPlanta
-Comparador de estratégias de rotação de culturas para o Planalto Central de Angola.
+Compara estratégias de rotação de culturas para o Planalto Central de Angola (Huambo),
+com dados de satélite em cache (NASA / Meteomatics) e as prioridades do agricultor.
 
-Dados esperados (opcional): cache_huambo.csv  (separador ";")
-  colunas: validdate, t_max_2m_24h:C, precip_24h:mm, soil_moisture_index_-5cm:idx
-  coluna opcional: ndvi  (se existir, é usada no lugar do proxy)
-Se o ficheiro não existir, a app usa dados de DEMONSTRAÇÃO e avisa o utilizador.
+Ficheiro de dados (opcional): cache_huambo.csv, separador ";" (ou ","),
+colunas: validdate, t_max_2m_24h:C, precip_24h:mm, soil_moisture_index_-5cm:idx
+Coluna opcional: qualquer coluna com "ndvi" no nome.
+Sem o ficheiro, a app usa dados de DEMONSTRAÇÃO e avisa o utilizador. Nunca falha por falta de dados.
 """
-from pathlib import Path
+import itertools
 import math
+from pathlib import Path
 
+import folium
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
-import folium
 import streamlit as st
-from streamlit.components.v1 import html
 
 try:
     from streamlit_folium import st_folium
-    HAS_SF = True
+    TEM_ST_FOLIUM = True
 except Exception:
-    HAS_SF = False
+    TEM_ST_FOLIUM = False
 
 st.set_page_config(
     page_title="RotaCampo · AngoPlanta",
@@ -30,700 +32,829 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ───────────────────────── PALETA E ESTILO ─────────────────────────
-VERDE, VERDE_ESC, FOLHA = "#1f5c3f", "#0f3323", "#3f8f5f"
-TERRA, OCRE, CREME, TINTA = "#b5651d", "#e0a526", "#f7f3ea", "#1c2a22"
-CORES_EST = [TERRA, VERDE, OCRE]
+# ============================================================================
+# 1. CONSTANTES
+# ============================================================================
+REF_LAT, REF_LON = -12.7761, 15.7392  # Huambo: ponto dos dados em cache
+MESES_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+HERO_IMG = "https://images.unsplash.com/photo-1500382017468-9049fed747ef?q=80&w=1600&auto=format&fit=crop"
 
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=DM+Sans:wght@400;500;600;700&display=swap');
-html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
-.stApp { background: #f7f3ea; color: #1c2a22; }
-.block-container { padding-top: 1.4rem; max-width: 1280px; }
-h1,h2,h3 { font-family: 'Fraunces', serif !important; color: #0f3323; letter-spacing: -0.01em; }
-section[data-testid="stSidebar"] { background: #fffdf8; border-right: 1px solid #e6dfcc; }
-section[data-testid="stSidebar"] h3 { font-size: 1.05rem; margin-top: .4rem; }
-
-.hero { background: radial-gradient(circle at 85% 20%, rgba(224,165,38,.30), transparent 40%),
-        linear-gradient(135deg, #0f3323 0%, #1f5c3f 70%, #2c7a52 100%);
-        border-radius: 22px; padding: 2.2rem 2.4rem; color: #fff; margin-bottom: 1.2rem;
-        box-shadow: 0 14px 30px rgba(15,51,35,.22); position: relative; overflow: hidden; }
-.hero:after { content:"🌾"; position:absolute; right:28px; bottom:-18px; font-size:7.5rem; opacity:.13; }
-.hero .tag { display:inline-block; background: rgba(255,255,255,.16); padding:.3rem .9rem; border-radius:999px;
-        font-size:.75rem; font-weight:600; letter-spacing:.06em; margin-bottom:.8rem; }
-.hero h1 { color:#fff !important; font-size:2.35rem; margin:0 0 .4rem 0; line-height:1.15; }
-.hero p { color:#dcefe3; max-width:760px; margin:0; font-size:1.02rem; line-height:1.55; }
-
-.kpi { background:#fff; border:1px solid #e6dfcc; border-radius:16px; padding:1rem 1.1rem; height:100%; }
-.kpi .l { font-size:.72rem; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:#7a6a45; }
-.kpi .v { font-family:'Fraunces',serif; font-size:1.65rem; font-weight:700; color:#0f3323; margin:.15rem 0; }
-.kpi .d { font-size:.8rem; color:#4d6354; }
-
-.scard { background:#fff; border:1px solid #e6dfcc; border-radius:20px; padding:1.3rem 1.3rem 1.1rem; height:100%;
-        box-shadow:0 6px 18px rgba(60,50,20,.05); }
-.scard.best { border:2px solid #1f5c3f; box-shadow:0 10px 26px rgba(31,92,63,.18); }
-.scard .role { font-size:.72rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
-.scard .name { font-family:'Fraunces',serif; font-size:1.2rem; font-weight:700; color:#0f3323; margin:.2rem 0 .6rem; }
-.scard .score { font-family:'Fraunces',serif; font-size:3rem; font-weight:700; line-height:1; color:#0f3323; }
-.scard .score small { font-size:1rem; color:#7a6a45; font-family:'DM Sans',sans-serif; font-weight:600; }
-.bar { height:8px; background:#efe9d8; border-radius:99px; margin:.7rem 0 .5rem; overflow:hidden; }
-.bar > div { height:100%; border-radius:99px; }
-.muted { font-size:.82rem; color:#5f6f64; }
-.star { display:inline-block; background:#1f5c3f; color:#fff; font-size:.72rem; font-weight:700;
-        padding:.2rem .65rem; border-radius:99px; margin-bottom:.4rem; }
-.chip { display:block; background:#f7f3ea; border-radius:12px; padding:.5rem .7rem; margin-top:.4rem; font-size:.86rem; }
-.chip b { color:#0f3323; }
-.chip span { color:#7a6a45; font-size:.74rem; display:block; font-weight:600; letter-spacing:.03em; }
-
-.bloco { background:#fff; border:1px solid #e6dfcc; border-radius:16px; padding:1.1rem 1.2rem; height:100%; }
-.bloco h4 { margin:0 0 .5rem 0; font-size:1rem; font-family:'DM Sans',sans-serif; font-weight:700; }
-.bloco ul { margin:0; padding-left:1.1rem; } .bloco li { font-size:.9rem; line-height:1.5; margin-bottom:.35rem; color:#26372d; }
-.b-evid { border-top:5px solid #1f5c3f; } .b-ben { border-top:5px solid #3f8f5f; }
-.b-lac { border-top:5px solid #e0a526; } .b-ris { border-top:5px solid #b5651d; }
-
-.nota { background:#fff8e6; border:1px solid #f0dca0; border-radius:12px; padding:.8rem 1rem; font-size:.88rem; color:#5b4a14; }
-.explica { background:#fff; border:1px solid #e6dfcc; border-left:4px solid #1f5c3f; border-radius:12px;
-        padding:.85rem 1.1rem; font-size:.9rem; line-height:1.55; margin-top:.4rem; }
-.conf { display:inline-block; font-weight:700; padding:.2rem .7rem; border-radius:99px; font-size:.8rem; }
-.modulo { background:#fff; border:1px solid #e6dfcc; border-radius:16px; padding:1rem 1.1rem; height:100%; }
-.modulo .n { font-family:'Fraunces',serif; font-size:1.6rem; color:#b5651d; font-weight:700; }
-.modulo b { color:#0f3323; }
-div[data-baseweb="tab-list"] { gap: .3rem; }
-button[data-baseweb="tab"] { font-weight:600; }
-</style>
-""", unsafe_allow_html=True)
-
-# ───────────────────────── CONSTANTES AGRONÓMICAS ─────────────────────────
-MESES = {1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
-         7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"}
-
-CICLOS = [
-    {"nome": "Ciclo 1", "janela": "Out → Jan", "fase": "Chuvas (arranque)", "meses": [10, 11, 12, 1]},
-    {"nome": "Ciclo 2", "janela": "Fev → Mai", "fase": "Chuvas tardias", "meses": [2, 3, 4, 5]},
-    {"nome": "Ciclo 3", "janela": "Jun → Set", "fase": "Cacimbo (seca)", "meses": [6, 7, 8, 9]},
-]
-
-LOCAIS = {  # coordenadas aproximadas (a confirmar no terreno)
-    "Huambo (cidade)": (-12.7761, 15.7392),
-    "Caála": (-12.8500, 15.5600),
-    "Bailundo": (-12.1900, 15.8400),
-}
-PONTO_MAPA = "📌 Ponto escolhido no mapa"
-DADOS_REF = LOCAIS["Huambo (cidade)"]  # ponto a que se referem os dados em cache
-
-FONTE_PADRAO = "Síntese da equipa a partir de FAO EcoCrop e agronomia geral — A VALIDAR com técnico local"
-# Notas 1–5 (5 = melhor para o critério). rega=True → depende de água no cacimbo.
+# Tabela de culturas (valores qualitativos 1–5; 5 = melhor para o critério,
+# exceto "exig_n", que é a exigência de azoto: 5 = exige muito).
+# ATENÇÃO: valores iniciais da equipa, a confirmar com fontes locais (IIAM, extensionistas).
 CULTURAS = {
-    "milho":       dict(nome="Milho", e="🌽", agua=2, nfix=1, raizes=3, erosao=2, seca=2, calor=3, mercado=4, renda=3, dias=120, rega=False, nota="Gasta muito azoto do solo."),
-    "feijao":      dict(nome="Feijão-vulgar", e="🫘", agua=3, nfix=4, raizes=2, erosao=3, seca=2, calor=2, mercado=4, renda=3, dias=75, rega=False, nota="Fixa azoto; ciclo curto."),
-    "frade":       dict(nome="Feijão-frade", e="🫛", agua=4, nfix=4, raizes=2, erosao=4, seca=5, calor=5, mercado=3, renda=3, dias=70, rega=False, nota="Muito tolerante à seca."),
-    "amendoim":    dict(nome="Amendoim", e="🥜", agua=3, nfix=4, raizes=3, erosao=3, seca=3, calor=3, mercado=4, renda=4, dias=110, rega=False, nota="Fixa azoto e tem boa procura."),
-    "consorcio":   dict(nome="Milho + feijão (consórcio)", e="🌽", agua=3, nfix=3, raizes=3, erosao=3, seca=3, calor=3, mercado=4, renda=3, dias=120, rega=False, nota="Base alimentar tradicional."),
-    "mandioca":    dict(nome="Mandioca", e="🍠", agua=5, nfix=1, raizes=4, erosao=3, seca=5, calor=4, mercado=4, renda=3, dias=300, rega=False, nota="Ciclo longo; funciona como reserva na terra."),
-    "batata_doce": dict(nome="Batata-doce", e="🍠", agua=4, nfix=1, raizes=3, erosao=4, seca=4, calor=4, mercado=3, renda=3, dias=120, rega=False, nota="Cobre o solo; tolerante."),
-    "batata_rena": dict(nome="Batata-rena", e="🥔", agua=1, nfix=1, raizes=2, erosao=1, seca=1, calor=1, mercado=5, renda=5, dias=100, rega=False, nota="Alta renda mas exigente em água e solo solto."),
-    "horticolas":  dict(nome="Hortícolas (tomate, repolho)", e="🍅", agua=1, nfix=1, raizes=2, erosao=2, seca=1, calor=2, mercado=5, renda=5, dias=90, rega=True, nota="Preço alto na entressafra, mas precisa de rega."),
-    "cobertura":   dict(nome="Adubo verde / cobertura", e="🌿", agua=4, nfix=5, raizes=4, erosao=5, seca=4, calor=4, mercado=1, renda=1, dias=90, rega=False, nota="Protege e adubra; sem venda directa."),
-    "pousio":      dict(nome="Pousio (solo descoberto)", e="🟫", agua=3, nfix=1, raizes=1, erosao=1, seca=3, calor=3, mercado=1, renda=1, dias=0, rega=False, nota="Sem cultura nem cobertura."),
+    "Milho": dict(emoji="🌽", grupo="Cereal", leguminosa=False, agua=2, n=1, exig_n=4, raizes=3, erosao=3,
+                  ciclo=120, seca=2, mercado=5, fonte="FAO EcoCrop; IIAM (a confirmar)"),
+    "Feijão": dict(emoji="🫘", grupo="Leguminosa", leguminosa=True, agua=3, n=4, exig_n=1, raizes=2, erosao=3,
+                   ciclo=90, seca=2, mercado=4, fonte="FAO EcoCrop; IIAM (a confirmar)"),
+    "Amendoim": dict(emoji="🥜", grupo="Leguminosa", leguminosa=True, agua=3, n=4, exig_n=1, raizes=3, erosao=4,
+                     ciclo=110, seca=3, mercado=4, fonte="FAO EcoCrop; IIAM (a confirmar)"),
+    "Mandioca": dict(emoji="🍠", grupo="Raiz", leguminosa=False, agua=4, n=1, exig_n=2, raizes=5, erosao=3,
+                     ciclo=300, seca=5, mercado=3, fonte="FAO EcoCrop; IIAM (a confirmar)"),
+    "Batata-doce": dict(emoji="🥔", grupo="Raiz", leguminosa=False, agua=3, n=1, exig_n=2, raizes=4, erosao=5,
+                        ciclo=120, seca=3, mercado=3, fonte="FAO EcoCrop; IIAM (a confirmar)"),
 }
-for _c in CULTURAS.values():
-    _c["fonte"] = FONTE_PADRAO
-    _c["validada"] = False
+TABELA_CONFIRMADA = False
 
-ESTRATEGIAS = {  # biblioteca de alternativas
-    "tradicional": ("Subsistência tradicional", ["consorcio", "batata_doce", "mandioca"]),
-    "comercial": ("Renda comercial", ["feijao", "batata_rena", "frade"]),
-    "horta": ("Horticultura com rega", ["feijao", "batata_rena", "horticolas"]),
-    "solo": ("Recuperação do solo", ["amendoim", "consorcio", "cobertura"]),
-    "agua": ("Poupa-água", ["feijao", "batata_doce", "frade"]),
-    "encosta": ("Protecção de encostas", ["amendoim", "batata_doce", "cobertura"]),
-    "mista": ("Mista: solo + renda", ["amendoim", "batata_rena", "mandioca"]),
-    "mercado": ("Mercado local", ["consorcio", "batata_rena", "frade"]),
-}
-ATUAIS = {  # práticas comuns para o utilizador indicar a sua rotação actual
-    "Milho contínuo (milho → milho → pousio)": ["milho", "milho", "pousio"],
-    "Uma safra por ano (milho+feijão → pousio → pousio)": ["consorcio", "pousio", "pousio"],
-    "Feijão e milho alternados": ["feijao", "milho", "pousio"],
-    "Mandioca contínua": ["mandioca", "mandioca", "mandioca"],
-    "Batata-rena em sequência": ["batata_rena", "batata_rena", "pousio"],
+CRITERIOS = {
+    "agua": "Poupar água",
+    "solo": "Melhorar o solo",
+    "erosao": "Reduzir a erosão",
+    "renda": "Renda extra",
+    "mercado": "Mercado",
+    "clima": "Chuvas e calor",
 }
 
-PRIORIDADES = [
-    ("agua", "💧 Poupar água", 3),
-    ("solo", "🌱 Melhorar o solo", 3),
-    ("erosao", "⛰️ Reduzir a erosão", 2),
-    ("renda", "💰 Renda extra", 3),
-    ("mercado", "🏪 Mercado", 2),
-    ("chuvas", "🌧️ Resistir a chuvas irregulares", 2),
-    ("calor", "🌡️ Resistir ao calor", 1),
+PERFIS = {
+    "Personalizado": None,
+    "Poupar água": dict(agua=5, solo=2, erosao=2, renda=2, mercado=2, clima=5),
+    "Recuperar a terra": dict(agua=2, solo=5, erosao=5, renda=1, mercado=1, clima=3),
+    "Vender mais": dict(agua=2, solo=2, erosao=1, renda=5, mercado=5, clima=3),
+    "Comida para a família": dict(agua=3, solo=4, erosao=3, renda=2, mercado=2, clima=4),
+}
+
+JANELAS = [
+    dict(nome="Ciclo 1", periodo="Out–Jan", fase="Época chuvosa", meses=[10, 11, 12, 1], dias=122),
+    dict(nome="Ciclo 2", periodo="Fev–Mai", fase="Chuvas tardias", meses=[2, 3, 4, 5], dias=120),
+    dict(nome="Ciclo 3", periodo="Jun–Set", fase="Cacimbo (seca)", meses=[6, 7, 8, 9], dias=122),
 ]
-NOMES_CRIT = {k: n for k, n, _ in PRIORIDADES}
 
-# ───────────────────────── DADOS ─────────────────────────
-def _demo():
-    datas = pd.date_range("2025-10-01", periods=12, freq="MS")
-    chuva = [130, 190, 210, 230, 210, 220, 140, 20, 2, 1, 5, 40]
-    umid = [0.55, 0.85, 1.0, 1.05, 1.0, 1.05, 0.8, 0.3, 0.1, 0.0, 0.0, 0.12]
-    tmax = [25, 24, 23, 23, 24, 24, 25, 26, 26, 27, 29, 30]
-    return pd.DataFrame({"validdate": datas, "t_max_2m_24h:C": tmax,
-                         "precip_24h:mm": chuva, "soil_moisture_index_-5cm:idx": umid})
+COR_VERDE, COR_TERRA, COR_CINZA = "#21462d", "#9a4a26", "#7a6c5d"
+
+# ============================================================================
+# 2. ESTILO
+# ============================================================================
+CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=Public+Sans:wght@400;500;600&display=swap');
+html, body, [class*="css"] { font-family: 'Public Sans', sans-serif; }
+h1, h2, h3, h4, .rc-display { font-family: 'Bricolage Grotesque', sans-serif !important; letter-spacing: -0.01em; }
+.stApp { background: #f6f3ee; color: #26211c; }
+.block-container { padding-top: 1.4rem; max-width: 1280px; }
+section[data-testid="stSidebar"] { background: #fffdf9; border-right: 1px solid #e6dccd; }
+footer { visibility: hidden; }
+
+/* Cabeçalho */
+.rc-hero {
+  background: linear-gradient(115deg, rgba(34,22,14,.90) 0%, rgba(33,70,45,.84) 100%), url('__HERO__');
+  background-size: cover; background-position: center;
+  border-radius: 8px; padding: 2.2rem 2.2rem 1.8rem; color: #fff; margin-bottom: 1.1rem;
+}
+.rc-hero .origem { color: #e7b894; font-weight: 600; font-size: .9rem; margin-bottom: .5rem; }
+.rc-hero h1 { font-size: 2.4rem; margin: 0 0 .5rem 0; color: #fff; line-height: 1.15; }
+.rc-hero p { max-width: 780px; margin: 0 0 1rem 0; line-height: 1.55; color: #f1e6d6; font-size: 1.02rem; }
+.rc-passos { display: flex; flex-wrap: wrap; gap: .5rem; }
+.rc-passos span { background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.25);
+  border-radius: 999px; padding: .3rem .85rem; font-size: .88rem; color: #fff; }
+
+/* Indicadores */
+.rc-stat { border-left: 4px solid #9a4a26; background: #fffdf9; padding: .75rem 1rem;
+  border-radius: 0 6px 6px 0; height: 100%; }
+.rc-stat .rotulo { display: block; font-size: .82rem; color: #7a6c5d; font-weight: 600; }
+.rc-stat b { display: block; font-size: 1.5rem; color: #21462d; font-family: 'Bricolage Grotesque', sans-serif; line-height: 1.25; }
+.rc-stat .nota { font-size: .82rem; color: #5b4f43; }
+
+/* Recomendação */
+.rc-resumo { background: #21462d; color: #fff; border-radius: 8px; padding: 1.1rem 1.4rem; margin: .4rem 0 1rem; }
+.rc-resumo b { color: #ffd9b8; }
+.rc-resumo p { margin: 0; line-height: 1.55; font-size: 1.02rem; }
+
+/* Estratégias */
+.rc-estrategia { background: #fffdf9; border: 1px solid #e6dccd; border-radius: 8px; padding: 1rem 1.2rem; height: 100%; }
+.rc-estrategia.destaque { border: 2px solid #21462d; }
+.rc-estrategia h4 { margin: 0 0 .3rem 0; font-size: 1.05rem; }
+.rc-nota { font-family: 'Bricolage Grotesque', sans-serif; font-size: 2.5rem; font-weight: 700; color: #21462d; line-height: 1; }
+.rc-nota small { font-size: 1rem; color: #7a6c5d; font-weight: 500; }
+.rc-seq { font-size: 1rem; margin: .6rem 0; line-height: 1.7; }
+.rc-conf { display: inline-block; padding: .15rem .7rem; border-radius: 999px; font-size: .82rem; font-weight: 600; }
+.rc-conf.Alta { background: #dcefe0; color: #1b5e2f; }
+.rc-conf.Média { background: #fbeccb; color: #7a5200; }
+.rc-conf.Baixa { background: #f6d9d2; color: #8a2a14; }
+
+/* Ciclos */
+.rc-ciclo { background: #fffdf9; border: 1px solid #e6dccd; border-radius: 8px; padding: .9rem 1.1rem; height: 100%; }
+.rc-ciclo .fase { font-size: .86rem; color: #9a4a26; font-weight: 600; }
+.rc-ciclo .cultura { font-family: 'Bricolage Grotesque', sans-serif; font-size: 1.3rem; font-weight: 700; margin: .1rem 0 .3rem 0; }
+.rc-ciclo p { font-size: .9rem; color: #4a3f35; margin: 0; line-height: 1.5; }
+
+/* Quatro blocos */
+.rc-bloco { border-radius: 8px; padding: .85rem 1.05rem; height: 100%; font-size: .92rem; line-height: 1.5; color: #26211c; }
+.rc-bloco h5 { margin: 0 0 .4rem 0; font-family: 'Bricolage Grotesque', sans-serif; font-size: 1.02rem; }
+.rc-bloco ul { margin: 0; padding-left: 1.1rem; }
+.rc-bloco li { margin-bottom: .25rem; }
+.rc-evid { background: #e6efe8; } .rc-ben { background: #eef3dc; }
+.rc-lac { background: #fbf0d6; } .rc-risc { background: #f6e1da; }
+
+/* Diagnóstico */
+.rc-diag { background: #fffdf9; border: 1px solid #e6dccd; border-left: 5px solid #7a6c5d; border-radius: 0 8px 8px 0;
+  padding: .7rem 1rem; margin-bottom: .55rem; font-size: .93rem; line-height: 1.5; }
+.rc-diag b { display: block; margin-bottom: .1rem; }
+.rc-diag.ok { border-left-color: #2e7d46; } .rc-diag.alerta { border-left-color: #c77d2e; }
+.rc-diag.perigo { border-left-color: #b3361b; } .rc-diag.info { border-left-color: #4a7a9a; }
+
+/* Explicação dos gráficos */
+.rc-explica { background: #fffdf9; border-left: 4px solid #21462d; padding: .75rem 1rem; font-size: .9rem;
+  line-height: 1.5; margin-top: .3rem; border-radius: 0 6px 6px 0; }
+
+/* Telemóvel */
+@media (max-width: 640px) {
+  .block-container { padding: .8rem .7rem 3rem; }
+  .rc-hero { padding: 1.3rem 1.1rem; }
+  .rc-hero h1 { font-size: 1.65rem; }
+  .rc-hero p { font-size: .95rem; }
+  .rc-nota { font-size: 2.1rem; }
+  .rc-stat b { font-size: 1.25rem; }
+  div[data-baseweb="tab-list"] { overflow-x: auto; flex-wrap: nowrap; }
+  div[data-baseweb="tab-list"] button { white-space: nowrap; }
+}
+</style>
+""".replace("__HERO__", HERO_IMG)
+st.markdown(CSS, unsafe_allow_html=True)
 
 
-@st.cache_data
+def compact(texto):
+    """Junta o HTML numa só linha. O Markdown trata linhas indentadas ou em branco como código."""
+    return " ".join(linha.strip() for linha in texto.splitlines() if linha.strip())
+
+
+def html(texto):
+    st.markdown(compact(texto), unsafe_allow_html=True)
+
+
+def mostrar(fig, altura=None):
+    fig.update_layout(margin=dict(l=10, r=10, t=55, b=10), paper_bgcolor="rgba(0,0,0,0)",
+                      font=dict(family="Public Sans, sans-serif", color="#26211c"))
+    if altura:
+        fig.update_layout(height=altura)
+    try:
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+    except TypeError:  # versões antigas do Streamlit
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+
+def tabela(dados):
+    """Mostra uma tabela à largura total, em versões novas e antigas do Streamlit."""
+    try:
+        st.dataframe(dados, width="stretch", hide_index=True)
+    except TypeError:
+        st.dataframe(dados, use_container_width=True, hide_index=True)
+
+
+def fmt(valor, sufixo="", casas=1):
+    return "sem dado" if valor is None or pd.isna(valor) else f"{valor:.{casas}f}{sufixo}"
+
+
+html("""
+<div class="rc-hero">
+  <div class="origem">AngoPlanta · NASA Space Apps Challenge</div>
+  <h1>RotaCampo: que rotação serve melhor a sua machamba?</h1>
+  <p>Compare três estratégias de rotação de culturas no Planalto Central de Angola, com dados de satélite
+  e as suas prioridades. Cada resultado mostra o que sabemos, o que falta saber e o que deve confirmar com um técnico local.</p>
+  <div class="rc-passos"><span>1 · Escolha o local no mapa</span><span>2 · Indique a rotação atual</span>
+  <span>3 · Defina as prioridades</span><span>4 · Compare as estratégias</span></div>
+</div>
+""")
+
+
+# ============================================================================
+# 3. DADOS (leitura tolerante a falhas, com modo de demonstração)
+# ============================================================================
+def _dados_demo():
+    """Dados de DEMONSTRAÇÃO (não reais), só para a app nunca falhar."""
+    return pd.DataFrame({
+        "validdate": pd.date_range("2025-01-01", periods=12, freq="MS"),
+        "Chuva_mm": [200, 190, 220, 120, 10, 0, 0, 3, 40, 110, 190, 210],
+        "Umidade_Solo_Idx": [0.90, 0.95, 1.00, 0.85, 0.35, 0.10, 0.05, 0.05, 0.10, 0.50, 0.80, 0.90],
+        "Temp_Max_C": [25, 25, 25, 25, 26, 25, 25, 27, 29, 27, 25, 24],
+    })
+
+
+def _ler_csv():
+    candidatos = [Path("cache_huambo.csv")]
+    try:
+        candidatos.append(Path(__file__).parent / "cache_huambo.csv")
+    except NameError:
+        pass
+    for caminho in candidatos:
+        if caminho.exists():
+            for sep in (";", ","):
+                try:
+                    bruto = pd.read_csv(caminho, sep=sep)
+                    if bruto.shape[1] > 1 and len(bruto) > 0:
+                        return bruto
+                except Exception:
+                    continue
+    return None
+
+
+def _normalizar(bruto):
+    """Renomeia colunas, converte tipos e devolve None se os dados forem inutilizáveis."""
+    mapa = {}
+    for col in bruto.columns:
+        nome = str(col).lower()
+        if "t_max" in nome or "temp" in nome:
+            mapa[col] = "Temp_Max_C"
+        elif "precip" in nome or "chuva" in nome:
+            mapa[col] = "Chuva_mm"
+        elif "soil" in nome or "umid" in nome or "humid" in nome:
+            mapa[col] = "Umidade_Solo_Idx"
+        elif "validdate" in nome or nome in ("date", "data"):
+            mapa[col] = "validdate"
+    df_ = bruto.rename(columns=mapa)
+    if not {"validdate", "Temp_Max_C", "Chuva_mm", "Umidade_Solo_Idx"}.issubset(df_.columns):
+        return None
+    df_ = df_.loc[:, ~df_.columns.duplicated()].copy()
+    df_["validdate"] = pd.to_datetime(df_["validdate"], errors="coerce", utc=True).dt.tz_localize(None)
+    for col in ("Temp_Max_C", "Chuva_mm", "Umidade_Solo_Idx"):
+        df_[col] = pd.to_numeric(df_[col], errors="coerce")
+    df_ = df_.dropna(subset=["validdate"]).sort_values("validdate").reset_index(drop=True)
+    if len(df_) < 3 or df_[["Temp_Max_C", "Chuva_mm", "Umidade_Solo_Idx"]].isna().all().any():
+        return None
+    return df_
+
+
+@st.cache_data(show_spinner=False)
 def carregar_dados():
-    caminho = Path(__file__).parent / "cache_huambo.csv"
-    demo = False
-    if caminho.exists():
-        df = pd.read_csv(caminho, sep=";")
-        if df.shape[1] < 3:
-            df = pd.read_csv(caminho, sep=",")
-    else:
-        df, demo = _demo(), True
-    df = df.rename(columns={"t_max_2m_24h:C": "Temp_Max_C", "precip_24h:mm": "Chuva_mm",
-                            "soil_moisture_index_-5cm:idx": "Umidade_Solo_Idx"})
-    df["validdate"] = pd.to_datetime(df["validdate"])
-    df = df.sort_values("validdate").reset_index(drop=True)
-    df["mes"] = df["validdate"].dt.month
-    df["ano"] = df["validdate"].dt.year
-    df["mes_label"] = df.apply(lambda r: f"{MESES[r['mes']]}/{str(r['ano'])[2:]}", axis=1)
-    df["Estacao"] = np.where(df["Umidade_Solo_Idx"] < 0.25, "Cacimbo (seca)", "Época das chuvas")
-
-    ndvi_col = next((c for c in df.columns if c.lower() == "ndvi"), None)
-    if ndvi_col:
-        df["NDVI"], ndvi_real = df[ndvi_col].astype(float), True
-    else:  # proxy: vegetação responde à humidade com ~1 mês de atraso
-        u = df["Umidade_Solo_Idx"].clip(0, 1.1).rolling(2, min_periods=1).mean().shift(1)
-        u.iloc[0] = df["Umidade_Solo_Idx"].clip(0, 1.1).iloc[0]
-        df["NDVI"], ndvi_real = 0.18 + 0.55 * (u / 1.1), False
-    return df, demo, ndvi_real
+    """Devolve (dados, é_demonstração). Lê só o cache local, nunca faz download ao vivo."""
+    df_, demo = None, False
+    try:
+        bruto = _ler_csv()
+        df_ = _normalizar(bruto) if bruto is not None else None
+    except Exception:
+        df_ = None
+    if df_ is None:
+        df_, demo = _dados_demo(), True
+    df_["mes"] = df_["validdate"].dt.month
+    df_["ano"] = df_["validdate"].dt.year
+    df_["mes_label"] = [f"{MESES_PT[m - 1]}/{str(a)[2:]}" for m, a in zip(df_["mes"], df_["ano"])]
+    return df_, demo
 
 
-def kmeans(X, k, iters=60):
-    X = np.asarray(X, float)
-    cent = X[np.argsort(X[:, 0])[np.linspace(0, len(X) - 1, k).astype(int)]]
-    lab = np.zeros(len(X), int)
-    for _ in range(iters):
-        lab = ((X[:, None, :] - cent[None]) ** 2).sum(2).argmin(1)
-        new = np.array([X[lab == j].mean(0) if (lab == j).any() else cent[j] for j in range(k)])
-        if np.allclose(new, cent):
+def agrupar_estacoes(d):
+    """IA simples (k-means, 2 grupos) sobre chuva e humidade do solo.
+    Separa meses de chuva e de cacimbo sem usar um limiar fixo."""
+    X = d[["Chuva_mm", "Umidade_Solo_Idx"]].apply(lambda c: c.fillna(c.median())).to_numpy(dtype=float)
+    desvio = X.std(axis=0)
+    desvio[desvio == 0] = 1
+    Z = (X - X.mean(axis=0)) / desvio
+    centros = np.array([Z[Z[:, 0].argmin()], Z[Z[:, 0].argmax()]])
+    rot = np.zeros(len(Z), dtype=int)
+    for _ in range(30):
+        dist = ((Z[:, None, :] - centros[None, :, :]) ** 2).sum(axis=2)
+        rot = dist.argmin(axis=1)
+        novos = np.array([Z[rot == k].mean(axis=0) if (rot == k).any() else centros[k] for k in range(2)])
+        if np.allclose(novos, centros):
             break
-        cent = new
-    return lab, cent
+        centros = novos
+    chuvoso = int(np.argmax(centros[:, 0]))
+    return np.where(rot == chuvoso, "Época das chuvas", "Cacimbo (seca)")
 
 
-def haversine(a, b):
-    la1, lo1, la2, lo2 = map(math.radians, (a[0], a[1], b[0], b[1]))
-    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
-    return 6371 * 2 * math.asin(math.sqrt(h))
+df, USA_DEMO = carregar_dados()
+df = df.copy()
+df["Estacao"] = agrupar_estacoes(df)
+COL_NDVI = next((c for c in df.columns if "ndvi" in str(c).lower()), None)
+if COL_NDVI:
+    df[COL_NDVI] = pd.to_numeric(df[COL_NDVI], errors="coerce")
+    if df[COL_NDVI].isna().all():
+        COL_NDVI = None
+clima_mes = df.groupby("mes")[["Chuva_mm", "Umidade_Solo_Idx", "Temp_Max_C"]].mean().reindex(range(1, 13))
+
+if USA_DEMO:
+    st.warning("**Dados de demonstração.** Não encontrei um `cache_huambo.csv` válido, por isso os valores de clima abaixo "
+               "**não são reais**. Coloque o ficheiro na mesma pasta do `app.py` para ver os dados de satélite.")
 
 
-
-def grafico(fig):
-    """Compatível com versões novas e antigas do Streamlit."""
-    try:
-        st.plotly_chart(fig, width="stretch")
-    except TypeError:
-        st.plotly_chart(fig, use_container_width=True)
-
-
-def tabela(data, **kw):
-    try:
-        st.dataframe(data, width="stretch", **kw)
-    except TypeError:
-        st.dataframe(data, use_container_width=True, **kw)
+# ============================================================================
+# 4. MOTOR DE PONTUAÇÃO (transparente, sem caixa preta)
+# ============================================================================
+def distancia_km(lat1, lon1, lat2, lon2):
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * 6371 * math.asin(math.sqrt(a))
 
 
-df, DEMO, NDVI_REAL = carregar_dados()
+def classe_humidade(v):
+    if v is None or pd.isna(v):
+        return "sem dado"
+    return "seco" if v < 0.25 else "moderado" if v < 0.5 else "bom para germinar"
 
-# ───────────────────────── BARRA LATERAL ─────────────────────────
-if "_pendente" in st.session_state:  # aplica clique do mapa antes de criar o widget
-    st.session_state["local_sel"] = st.session_state.pop("_pendente")
-st.session_state.setdefault("clique", None)
 
-with st.sidebar:
-    st.markdown("## 🌱 RotaCampo")
-    st.caption("by **AngoPlanta** · Planalto Central, Angola")
+def indicadores_janela(janela, irrigacao):
+    sub = clima_mes.loc[janela["meses"]]
+    cobertura = float(sub.notna().all(axis=1).mean())
+    base = sub if cobertura > 0 else clima_mes
+    chuva, umid, tmax = (float(np.nanmean(base[c])) if base[c].notna().any() else 0.5
+                         for c in ("Chuva_mm", "Umidade_Solo_Idx", "Temp_Max_C"))
+    if irrigacao and umid < 0.6:  # a rega recupera a maior parte da falta de água
+        umid = umid + (0.6 - umid) * 0.7
+    return dict(chuva=chuva, umid=umid, tmax=tmax, cobertura=cobertura, dias=janela["dias"])
 
-    st.markdown("### 1 · Local da lavra")
-    opcoes = list(LOCAIS) + ([PONTO_MAPA] if st.session_state["clique"] else [])
-    local_sel = st.selectbox("Onde fica a sua machamba?", opcoes, key="local_sel",
-                             help="Também pode clicar no mapa, na página principal.")
-    if local_sel == PONTO_MAPA and st.session_state["clique"]:
-        coord = st.session_state["clique"]
-    else:
-        coord = LOCAIS.get(local_sel, DADOS_REF)
 
-    st.markdown("### 2 · Rotação actual")
-    atual_nome = st.selectbox("Como roda as culturas hoje?", list(ATUAIS))
+def ajuste_janela(c, j):
+    """0–1: quanto a cultura se adapta à água, ao calor e à duração da janela."""
+    secura = 1 - min(max(j["umid"] / 0.6, 0), 1)
+    fit = 1 - secura * (1 - c["seca"] / 5)
+    calor = min(max((j["tmax"] - 28) / 4, 0), 1)
+    fit -= calor * 0.15 * (1 - c["seca"] / 5)
+    if c["ciclo"] > j["dias"]:
+        fit *= 0.85
+    return max(fit, 0.05)
 
-    st.markdown("### 3 · As suas prioridades")
-    st.caption("0 = não importa · 5 = muito importante")
-    pesos = {k: st.slider(n, 0, 5, d, key=f"p_{k}") for k, n, d in PRIORIDADES}
 
-    st.markdown("### 4 · Dados da lavra")
-    area_ha = st.slider("Área (hectares)", 0.5, 50.0, 2.5, step=0.5)
-    declive = st.slider("Declive do terreno (%)", 0, 30, 5,
-                        help="Sem modelo de elevação no cache — indique à vista. Mais declive dá mais peso à erosão.")
-    irrig = st.checkbox("Tenho rega no cacimbo", value=False)
-
-# ───────────────────────── INDICADORES DO LOCAL ─────────────────────────
-por_mes = df.groupby("mes").agg(chuva=("Chuva_mm", "mean"), umid=("Umidade_Solo_Idx", "mean"),
-                                tmax=("Temp_Max_C", "mean"))
-stats_ciclo = []
-for c in CICLOS:
-    sub = por_mes.reindex(c["meses"]).dropna()
-    stats_ciclo.append(dict(chuva=sub["chuva"].mean() if len(sub) else np.nan,
-                            umid=sub["umid"].mean() if len(sub) else np.nan,
-                            tmax=sub["tmax"].mean() if len(sub) else np.nan))
-
-cv_chuva = float(df["Chuva_mm"].std() / df["Chuva_mm"].mean()) if df["Chuva_mm"].mean() > 0 else 1.0
-meses_quentes = int((df["Temp_Max_C"] >= 30).sum())
-meses_secos = int((df["Umidade_Solo_Idx"] < 0.25).sum())
-dist_km = haversine(coord, DADOS_REF)
-SITE = dict(irrig=irrig, declive=declive, w_chuva=float(np.clip(cv_chuva, 0.3, 0.9)))
-
-# ───────────────────────── MOTOR DE PONTUAÇÃO (transparente) ─────────────────────────
-def criterios_cultura(chave, ci):
-    """Notas 0–5 de uma cultura num ciclo, já ajustadas ao local."""
-    c = CULTURAS[chave]
-    f = 1.0
-    if ci == 2 and not SITE["irrig"]:  # cacimbo sem rega: renda/mercado reduzem com a baixa tolerância à seca
-        f = 0.3 + 0.7 * (c["seca"] - 1) / 4
-    w = SITE["w_chuva"]
+def criterios_cultura(c, fit):
     return {
-        "agua": c["agua"],
-        "solo": (c["nfix"] + c["raizes"]) / 2,
-        "erosao": c["erosao"],
-        "renda": c["renda"] * f,
-        "mercado": c["mercado"] * f,
-        "chuvas": w * c["seca"] + (1 - w) * c["agua"],
-        "calor": c["calor"],
+        "agua": c["agua"] / 5,
+        "solo": (c["n"] + c["raizes"]) / 10,
+        "erosao": c["erosao"] / 5,
+        "renda": (c["mercado"] + (5 if c["ciclo"] <= 100 else 3 if c["ciclo"] <= 130 else 1)) / 10,
+        "mercado": c["mercado"] / 5,
+        "clima": 0.5 * c["seca"] / 5 + 0.5 * fit,
     }
 
 
-def pesos_efectivos():
-    p = {k: float(v) for k, v in pesos.items()}
-    p["erosao"] *= 1 + min(SITE["declive"], 20) / 40  # até +50% em declives ≥ 20 %
-    if sum(p.values()) == 0:
-        p = {k: 1.0 for k in p}
-    return p
+def avaliar(seq, janelas, pesos):
+    soma = sum(pesos.values()) or 1
+    ciclos, medios = [], {k: [] for k in CRITERIOS}
+    for i, nome in enumerate(seq):
+        c, j = CULTURAS[nome], janelas[i]
+        anterior = seq[i - 1]  # a rotação repete-se todos os anos
+        fit = ajuste_janela(c, j)
+        crit = criterios_cultura(c, fit)
+        base = sum(pesos[k] * crit[k] for k in pesos) / soma
+        rot, notas = 0.0, []
+        if nome == anterior:
+            rot -= 0.12
+            notas.append("repete a cultura do ciclo anterior")
+        elif c["leguminosa"] and not CULTURAS[anterior]["leguminosa"]:
+            rot += 0.06
+            notas.append(f"leguminosa depois de {anterior}: devolve azoto ao solo")
+        for k in CRITERIOS:
+            medios[k].append(crit[k])
+        ciclos.append(dict(cultura=nome, fit=fit, crit=crit, pontos=base * (0.5 + 0.5 * fit) + rot, notas=notas))
+    diversidade = 0.03 * (len(set(seq)) - 1)
+    score = float(np.clip((np.mean([c["pontos"] for c in ciclos]) + diversidade) * 100, 0, 100))
+    return dict(seq=tuple(seq), score=score, ciclos=ciclos, medios={k: float(np.mean(v)) * 100 for k, v in medios.items()})
 
 
-def avaliar(chaves, p=None):
-    p = p or pesos_efectivos()
-    por_ciclo = [criterios_cultura(k, i) for i, k in enumerate(chaves)]
-    media = {k: float(np.mean([pc[k] for pc in por_ciclo])) for k in NOMES_CRIT}
-    soma = sum(p.values())
-    contrib = {k: media[k] * p[k] / soma * 20 for k in NOMES_CRIT}  # pontos (0–100 no total)
-    return dict(media=media, contrib=contrib, total=sum(contrib.values()))
+def confianca(dist_km, janelas, fits_min, folga):
+    """Nível de confiança do resultado e os motivos, para mostrar ao agricultor."""
+    cobertura = float(np.mean([j["cobertura"] for j in janelas]))
+    n_meses = df[["ano", "mes"]].drop_duplicates().shape[0]
+    pts = 0.35 * cobertura + 0.25 * min(n_meses / 12, 1)
+    pts += 0.25 * (1 if dist_km <= 50 else 0.6 if dist_km <= 150 else 0.2)
+    pts += 0.15 * (1 if COL_NDVI else 0)
+    motivos = []
+    if USA_DEMO:
+        pts = min(pts, 0.3)
+        motivos.append("os dados de clima são de demonstração")
+    if dist_km > 50:
+        motivos.append(f"o local está a {dist_km:.0f} km dos dados de satélite")
+    if cobertura < 1:
+        motivos.append("faltam meses de dados em algum ciclo")
+    if not COL_NDVI:
+        motivos.append("sem NDVI para confirmar a estação de crescimento")
+    if fits_min < 0.5:
+        pts -= 0.10
+        motivos.append("uma das culturas está mal adaptada ao clima do seu ciclo")
+    if folga < 3:
+        pts -= 0.05
+        motivos.append("a pontuação é muito próxima da de outra estratégia")
+    if not TABELA_CONFIRMADA:
+        pts = min(pts, 0.74)
+        motivos.append("a tabela de culturas ainda não foi confirmada com fontes locais")
+    nivel = "Alta" if pts >= 0.75 else "Média" if pts >= 0.5 else "Baixa"
+    return nivel, pts, motivos
 
 
-def estabilidade(rotacoes, n=400, seed=7):
-    """% de simulações (pesos ±1) em que cada rotação fica em 1.º lugar."""
-    rng = np.random.default_rng(seed)
-    base, vitorias = pesos_efectivos(), np.zeros(len(rotacoes))
-    for _ in range(n):
-        p = {k: max(0.0, v + rng.integers(-1, 2)) for k, v in base.items()}
-        if sum(p.values()) == 0:
-            p = dict(base)
-        sc = [avaliar(r, p)["total"] for r in rotacoes]
-        vitorias[int(np.argmax(sc))] += 1
-    return vitorias / n * 100
+def diagnostico_lavra(rot, janelas, irrigacao):
+    """Diagnóstico automático da rotação atual: azoto, ordem das culturas, erosão, cacimbo e diversidade."""
+    itens = []
+    cs = [CULTURAS[c] for c in rot]
+    balanco = sum(c["n"] - c["exig_n"] for c in cs)
+    n_leg = sum(c["leguminosa"] for c in cs)
+    if balanco <= -3:
+        itens.append(("perigo", "Azoto: a terra perde mais do que recebe",
+                      f"A rotação ({' → '.join(rot)}) gasta azoto e quase não o devolve (balanço {balanco:+d}). "
+                      "Sem adubo, a produtividade tende a cair de ano para ano. Uma leguminosa (feijão ou amendoim) ajuda a repor."))
+    elif balanco >= 3:
+        itens.append(("ok", "Azoto: a terra é recompensada",
+                      f"As leguminosas devolvem azoto ao solo (balanço {balanco:+d}). É bom momento para culturas que exigem mais, como o milho."))
+    else:
+        itens.append(("info", "Azoto: equilíbrio razoável",
+                      f"O que a rotação gasta e devolve de azoto está próximo (balanço {balanco:+d}). Vigie o crescimento do milho, que é o mais exigente."))
+    if n_leg == 0:
+        itens.append(("alerta", "Sem leguminosas",
+                      "Nenhum ciclo tem feijão ou amendoim. Incluir uma leguminosa reduz a necessidade de adubo e quebra ciclos de pragas."))
+    repetidas = [(rot[i - 1], rot[i]) for i in range(3) if rot[i] == rot[i - 1]]
+    if repetidas:
+        itens.append(("perigo", "Cultura repetida em ciclos seguidos",
+                      f"{repetidas[0][0]} aparece em ciclos seguidos. Isso favorece pragas e doenças do solo e esgota sempre os mesmos nutrientes."))
+    for i, nome in enumerate(rot):
+        if nome == "Milho" and CULTURAS[rot[i - 1]]["leguminosa"]:
+            itens.append(("ok", "Boa ordem: milho depois de leguminosa",
+                          f"O milho no {JANELAS[i]['nome']} aproveita o azoto deixado por {rot[i - 1]}."))
+            break
+    media_erosao = np.mean([c["erosao"] for c in cs])
+    if media_erosao <= 2.7:
+        itens.append(("alerta", "Pouca cobertura contra a erosão",
+                      "As culturas escolhidas protegem pouco o solo das chuvas fortes. Considere batata-doce ou amendoim, que cobrem melhor a terra."))
+    elif media_erosao >= 3.8:
+        itens.append(("ok", "Boa proteção contra a erosão",
+                      "A rotação mantém o solo bem coberto, o que ajuda a reter terra e água."))
+    fit3 = ajuste_janela(cs[2], janelas[2])
+    if fit3 < 0.6 and not irrigacao:
+        itens.append(("alerta", f"{rot[2]} sofre no cacimbo",
+                      f"No ciclo 3 (Jun–Set) o solo tem humidade {janelas[2]['umid']:.2f} ({classe_humidade(janelas[2]['umid'])}). "
+                      "Sem rega, escolha uma cultura tolerante à seca, como a mandioca."))
+    if len(set(rot)) == 3:
+        itens.append(("ok", "Boa diversidade", "Três culturas diferentes espalham o risco de pragas e de mau tempo."))
+    elif len(set(rot)) == 1:
+        itens.append(("perigo", "Monocultura", "Com uma só cultura o risco de perder a colheita é muito maior."))
+    if "Mandioca" in rot:
+        itens.append(("info", "A mandioca ocupa a terra por muito tempo",
+                      "A mandioca demora cerca de 10 meses e fica na terra mais do que um ciclo. Conte com isso no seu calendário."))
+    return itens
 
 
-atual = ATUAIS[atual_nome]
-rank_lib = sorted(((avaliar(v[1])["total"], k) for k, v in ESTRATEGIAS.items() if v[1] != atual), reverse=True)
-alt_keys = [k for _, k in rank_lib[:2]]
-OPCOES = [("ATUAL", atual_nome.split(" (")[0], atual)] + \
-         [(f"ALTERNATIVA {l}", ESTRATEGIAS[k][0], ESTRATEGIAS[k][1]) for l, k in zip("AB", alt_keys)]
-AVAL = [avaliar(o[2]) for o in OPCOES]
-ESTAB = estabilidade([o[2] for o in OPCOES])
-MELHOR = int(np.argmax([a["total"] for a in AVAL]))
+# ============================================================================
+# 5. PASSO 1 · LOCAL NO MAPA
+# ============================================================================
+st.session_state.setdefault("lat", REF_LAT)
+st.session_state.setdefault("lon", REF_LON)
 
-
-def confianca():
-    itens, pts = [], 0
-    n = df["mes"].nunique()
-    p_clima = 30 * (0.2 if DEMO else min(1, n / 12))
-    pts += p_clima
-    itens.append(("Clima/solo", p_clima, 30, "dados de demonstração" if DEMO else f"{n} meses distintos no cache"))
-    p_loc = 25 * (1 if dist_km <= 15 else 0.6 if dist_km <= 60 else 0.3)
-    pts += p_loc
-    itens.append(("Local", p_loc, 25, f"a {dist_km:.0f} km do ponto dos dados (Huambo)"))
-    p_nd = 20 * (1 if NDVI_REAL else 0.35)
-    pts += p_nd
-    itens.append(("NDVI", p_nd, 20, "série real" if NDVI_REAL else "apenas proxy a partir da humidade"))
-    p_cul = 25 * 0.4
-    pts += p_cul
-    itens.append(("Tabela de culturas", p_cul, 25, "notas ainda por validar com fontes locais"))
-    nivel = "Alta" if pts >= 75 else "Média" if pts >= 50 else "Baixa"
-    return pts, nivel, itens
-
-
-CONF_PTS, CONF_NIVEL, CONF_ITENS = confianca()
-CONF_COR = {"Alta": ("#dff3e6", "#1f5c3f"), "Média": ("#fff1cc", "#8a5a00"), "Baixa": ("#fbe3d6", "#9a3d12")}[CONF_NIVEL]
-
-# ───────────────────────── CABEÇALHO ─────────────────────────
-st.markdown("""
-<div class="hero">
-  <div class="tag">🛰️ NASA SPACE APPS · EQUIPA ANGOPLANTA</div>
-  <h1>RotaCampo: compare estratégias de rotação para a sua machamba</h1>
-  <p>Escolha o local, indique a rotação que já usa e diga o que mais importa. Receba três estratégias
-  lado a lado — com dados de satélite, contas à vista e os pontos que ainda precisam de confirmação.</p>
-</div>
-""", unsafe_allow_html=True)
-
-if DEMO:
-    st.markdown('<div class="nota">⚠️ <b>Dados de demonstração.</b> Não foi encontrado <code>cache_huambo.csv</code> '
-                'ao lado do <code>app.py</code>. Os números abaixo servem só para ver a app a funcionar.</div>',
-                unsafe_allow_html=True)
-    st.write("")
-
-
-def kpi(col, label, valor, desc):
-    col.markdown(f'<div class="kpi"><div class="l">{label}</div><div class="v">{valor}</div>'
-                 f'<div class="d">{desc}</div></div>', unsafe_allow_html=True)
-
-
-k = st.columns(5)
-kpi(k[0], "📍 Local", local_sel.replace(PONTO_MAPA, "Ponto no mapa").split(" (")[0], f"{coord[0]:.3f}°, {coord[1]:.3f}°")
-kpi(k[1], "🌧️ Chuva média", f"{df['Chuva_mm'].mean():.0f} mm", f"Variabilidade (CV) {cv_chuva:.2f}")
-kpi(k[2], "💧 Meses secos", f"{meses_secos}", "umidade do solo < 0,25")
-kpi(k[3], "🌡️ Meses ≥ 30 °C", f"{meses_quentes}", f"Máx. {df['Temp_Max_C'].max():.1f} °C")
-k[4].markdown(f'<div class="kpi"><div class="l">🎯 Confiança</div><div class="v">{CONF_NIVEL}</div>'
-              f'<div class="d">{CONF_PTS:.0f}/100 · ver detalhe em “Comparar”</div></div>', unsafe_allow_html=True)
-st.write("")
-
-# ───────────────────────── MAPA (passo 1) ─────────────────────────
-with st.expander("🗺️ Passo 1 · Veja ou escolha o local no mapa", expanded=False):
-    m = folium.Map(location=list(coord), zoom_start=10)
-    folium.Marker(list(coord), tooltip="Sua lavra", icon=folium.Icon(color="green", icon="leaf")).add_to(m)
-    folium.Circle(list(coord), radius=4000, color=VERDE, fill=True, fill_opacity=0.12).add_to(m)
-    folium.Marker(list(DADOS_REF), tooltip="Ponto dos dados de satélite",
-                  icon=folium.Icon(color="orange", icon="cloud")).add_to(m)
-    if HAS_SF:
-        st.caption("Clique no mapa para marcar a sua machamba.")
-        out = st_folium(m, height=340, width=1100, returned_objects=["last_clicked"])
-        lc = out.get("last_clicked") if out else None
-        if lc:
-            novo = (round(lc["lat"], 4), round(lc["lng"], 4))
-            if st.session_state["clique"] != novo:
-                st.session_state["clique"] = novo
-                st.session_state["_pendente"] = PONTO_MAPA
+with st.expander("📍 Passo 1 · Escolha o local da sua machamba (clique no mapa)", expanded=True):
+    if TEM_ST_FOLIUM:
+        try:
+            mapa = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=9, tiles="OpenStreetMap")
+            folium.Marker([REF_LAT, REF_LON], tooltip="Ponto dos dados de satélite (Huambo)",
+                          icon=folium.Icon(color="darkred", icon="signal")).add_to(mapa)
+            folium.Marker([st.session_state.lat, st.session_state.lon], tooltip="A sua machamba",
+                          icon=folium.Icon(color="green", icon="leaf")).add_to(mapa)
+            try:
+                saida = st_folium(mapa, height=340, use_container_width=True, returned_objects=["last_clicked"])
+            except TypeError:
+                saida = st_folium(mapa, height=340, width=700, returned_objects=["last_clicked"])
+            clique = (saida or {}).get("last_clicked")
+            if clique and (abs(clique["lat"] - st.session_state.lat) > 1e-6 or abs(clique["lng"] - st.session_state.lon) > 1e-6):
+                st.session_state.lat, st.session_state.lon = clique["lat"], clique["lng"]
                 st.rerun()
+        except Exception:
+            st.info("Não consegui mostrar o mapa agora. Escreva as coordenadas abaixo.")
+            TEM_ST_FOLIUM = False
+    if not TEM_ST_FOLIUM:
+        ca, cb = st.columns(2)
+        st.session_state.lat = ca.number_input("Latitude", value=float(st.session_state.lat), format="%.4f")
+        st.session_state.lon = cb.number_input("Longitude", value=float(st.session_state.lon), format="%.4f")
+    if st.button("Voltar ao Huambo"):
+        st.session_state.lat, st.session_state.lon = REF_LAT, REF_LON
+        st.rerun()
+
+LAT, LON = float(st.session_state.lat), float(st.session_state.lon)
+DIST = distancia_km(LAT, LON, REF_LAT, REF_LON)
+
+# ============================================================================
+# 6. SIDEBAR · ROTAÇÃO E PRIORIDADES
+# ============================================================================
+lista_culturas = list(CULTURAS)
+for k in CRITERIOS:
+    st.session_state.setdefault(f"peso_{k}", 3)
+
+
+def aplicar_perfil():
+    perfil = PERFIS.get(st.session_state.get("perfil"))
+    if perfil:
+        for chave, valor in perfil.items():
+            st.session_state[f"peso_{chave}"] = valor
+
+
+st.sidebar.markdown("### Passo 2 · A sua rotação atual")
+area_ha = st.sidebar.slider("Área cultivada (hectares)", 0.5, 50.0, 2.5, step=0.5)
+rot_atual = [
+    st.sidebar.selectbox("Ciclo 1 (Out–Jan)", lista_culturas, index=0),
+    st.sidebar.selectbox("Ciclo 2 (Fev–Mai)", lista_culturas, index=4),
+    st.sidebar.selectbox("Ciclo 3 (Jun–Set)", lista_culturas, index=3),
+]
+irrigacao = st.sidebar.checkbox("Tenho rega no cacimbo", value=False)
+
+st.sidebar.markdown("### Passo 3 · As suas prioridades")
+st.sidebar.selectbox("Perfil rápido", list(PERFIS), key="perfil", on_change=aplicar_perfil)
+st.sidebar.caption("0 = não importa · 5 = muito importante")
+pesos = {k: st.sidebar.slider(nome, 0, 5, key=f"peso_{k}") for k, nome in CRITERIOS.items()}
+if sum(pesos.values()) == 0:
+    st.sidebar.warning("Todas as prioridades estão a zero. Usei o mesmo peso para todas.")
+    pesos = {k: 1 for k in CRITERIOS}
+
+# ============================================================================
+# 7. CÁLCULO DAS 3 ESTRATÉGIAS
+# ============================================================================
+janelas = [indicadores_janela(j, irrigacao) for j in JANELAS]
+atual = avaliar(rot_atual, janelas, pesos)
+todas = sorted((avaliar(s, janelas, pesos) for s in itertools.product(lista_culturas, repeat=3)),
+               key=lambda r: r["score"], reverse=True)
+candidatas = [r for r in todas if r["seq"] != atual["seq"]]
+alt1 = candidatas[0]
+alt2 = next((r for r in candidatas[1:] if sum(a != b for a, b in zip(r["seq"], alt1["seq"])) >= 2), candidatas[1])
+estrategias = [("A sua rotação atual", atual),
+               ("Alternativa 1 · melhor para as suas prioridades", alt1),
+               ("Alternativa 2 · diversificada", alt2)]
+melhor_score = max(e["score"] for _, e in estrategias)
+for _, e in estrategias:
+    outros = sorted((x["score"] for _, x in estrategias if x is not e), reverse=True)
+    e["folga"] = abs(e["score"] - outros[0])
+    e["conf"], e["conf_pts"], e["conf_motivos"] = confianca(DIST, janelas, min(c["fit"] for c in e["ciclos"]), e["folga"])
+
+# ============================================================================
+# 8. INDICADORES DO LOCAL
+# ============================================================================
+try:
+    mes_calor = MESES_PT[int(clima_mes["Temp_Max_C"].idxmax()) - 1]
+    mes_chuva = MESES_PT[int(clima_mes["Chuva_mm"].idxmax()) - 1]
+except Exception:
+    mes_calor = mes_chuva = "—"
+umid_media = df["Umidade_Solo_Idx"].mean()
+
+k1, k2, k3, k4 = st.columns(4)
+with k1:
+    html(f"""<div class="rc-stat"><span class="rotulo">Local escolhido</span><b>{LAT:.3f}°, {LON:.3f}°</b>
+    <span class="nota">A {DIST:.0f} km do ponto com dados de satélite</span></div>""")
+with k2:
+    html(f"""<div class="rc-stat"><span class="rotulo">Calor máximo</span><b>{fmt(clima_mes['Temp_Max_C'].max(), ' °C')}</b>
+    <span class="nota">Mês mais quente: {mes_calor}</span></div>""")
+with k3:
+    html(f"""<div class="rc-stat"><span class="rotulo">Chuva máxima</span><b>{fmt(clima_mes['Chuva_mm'].max(), ' mm')}</b>
+    <span class="nota">Mês mais chuvoso: {mes_chuva}</span></div>""")
+with k4:
+    html(f"""<div class="rc-stat"><span class="rotulo">Humidade do solo (média)</span><b>{fmt(umid_media, '', 2)}</b>
+    <span class="nota">Escala de 0 (seco) a 1 (húmido): {classe_humidade(umid_media)}</span></div>""")
+st.caption("Fonte: dados de satélite em cache (NASA / Meteomatics), um valor por mês. "
+           f"Área da machamba: {area_ha:g} ha.")
+
+if DIST > 150:
+    st.warning(f"A sua machamba está a {DIST:.0f} km do ponto onde temos dados. O clima pode ser bem diferente, "
+               "por isso a confiança dos resultados é mais baixa.")
+elif DIST > 50:
+    st.info(f"A sua machamba está a {DIST:.0f} km do ponto com dados. Os resultados são aproximados.")
+
+st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+aba_cmp, aba_clima, aba_cult, aba_info = st.tabs([
+    "🧭 Comparar estratégias", "📊 Chuva e solo", "🌾 Culturas", "ℹ️ Como funciona",
+])
+
+
+# ============================================================================
+# 9. ABA · COMPARAR ESTRATÉGIAS
+# ============================================================================
+def bloco(css, titulo, itens):
+    li = "".join(f"<li>{i}</li>" for i in itens) or "<li>Sem pontos a destacar.</li>"
+    return f'<div class="rc-bloco {css}"><h5>{titulo}</h5><ul>{li}</ul></div>'
+
+
+def montar_blocos(nome, e):
+    ev, ben, lac, risc = [], [], [], []
+    for jan, j, c in zip(JANELAS, janelas, e["ciclos"]):
+        ev.append(f"{jan['nome']} ({jan['periodo']}): chuva {j['chuva']:.0f} mm, humidade do solo {j['umid']:.2f} "
+                  f"({classe_humidade(j['umid'])}), máxima de {j['tmax']:.1f} °C. "
+                  f"Ajuste de <b>{c['cultura']}</b> ao clima: {c['fit'] * 100:.0f}%.")
+        ev.extend(f"{c['cultura']} no {jan['nome']}: {n}." for n in c["notas"])
+    n_leg = sum(CULTURAS[c["cultura"]]["leguminosa"] for c in e["ciclos"])
+    if n_leg:
+        ben.append(f"{n_leg} ciclo(s) com leguminosa, que fixam azoto e reduzem a necessidade de adubo.")
+    top = sorted(e["medios"].items(), key=lambda kv: kv[1], reverse=True)[:2]
+    ben.append("Pontos mais fortes: " + " e ".join(f"{CRITERIOS[k].lower()} ({v:.0f}/100)" for k, v in top) + ".")
+    if nome != estrategias[0][0]:
+        melhor = max(CRITERIOS, key=lambda k: e["medios"][k] - atual["medios"][k])
+        ganho = e["medios"][melhor] - atual["medios"][melhor]
+        if ganho > 0:
+            ben.append(f"Em relação à atual, ganha {ganho:.0f} pontos em {CRITERIOS[melhor].lower()}.")
+    if DIST > 50:
+        lac.append(f"O local está a {DIST:.0f} km dos dados de satélite.")
+    if USA_DEMO:
+        lac.append("Os dados de clima são de demonstração, não reais.")
+    if not COL_NDVI:
+        lac.append("Sem NDVI no cache: não sabemos se o campo está vazio nem a estação de crescimento real.")
+    lac += ["Declive não medido: a erosão é estimada pela cultura, não pelo terreno.",
+            "Sem dados do solo (textura, pH, matéria orgânica) nem preços de mercado atuais."]
+    if not TABELA_CONFIRMADA:
+        lac.append("Tabela de culturas ainda por confirmar com fontes locais.")
+    for jan, c in zip(JANELAS, e["ciclos"]):
+        cult = CULTURAS[c["cultura"]]
+        if c["fit"] < 0.6:
+            risc.append(f"{c['cultura']} no {jan['nome']} ({jan['fase']}) pode ter pouca água ou calor a mais. Considere rega.")
+        if cult["ciclo"] > jan["dias"]:
+            risc.append(f"{c['cultura']} demora cerca de {cult['ciclo']} dias e ocupa a terra mais do que este ciclo.")
+    if len(set(e["seq"])) < 3:
+        risc.append("Pouca diversidade de culturas: maior risco de pragas e doenças.")
+    risc.append("<b>Valide com um técnico agrícola local antes de decidir.</b>")
+    return ev, ben, lac, risc
+
+
+with aba_cmp:
+    # Recomendação em uma frase
+    melhor_nome, melhor_e = max(estrategias, key=lambda t: t[1]["score"])
+    seq_melhor = " → ".join(melhor_e["seq"])
+    if melhor_e is atual:
+        frase = (f"Com as suas prioridades, a <b>sua rotação atual</b> ({seq_melhor}) já é a que melhor serve a sua machamba, "
+                 f"com {atual['score']:.0f} pontos.")
     else:
-        html(m._repr_html_(), height=340)
-        st.info("Para clicar no mapa instale `streamlit-folium` (já incluído no requirements.txt). "
-                "Por agora escolha o local na barra lateral.")
+        dif = melhor_e["score"] - atual["score"]
+        frase = (f"Com as suas prioridades, a melhor opção é <b>{seq_melhor}</b>, com {melhor_e['score']:.0f} pontos "
+                 f"({dif:+.0f} em relação à rotação atual). A confiança é {melhor_e['conf'].lower()}.")
+    html(f'<div class="rc-resumo"><p>{frase}</p></div>')
 
-# ───────────────────────── ABAS ─────────────────────────
-aba1, aba2, aba3, aba4, aba5, aba6 = st.tabs([
-    "⚖️ Comparar estratégias", "🌦️ Clima & solo", "🛰️ NDVI & IA",
-    "🌽 Culturas", "🎓 Formação & impacto", "ℹ️ Método"])
+    # Diagnóstico automático da lavra
+    st.markdown("#### Diagnóstico da sua lavra")
+    st.caption(f"Com base na rotação que indicou: {' → '.join(rot_atual)}.")
+    titulos_tipo = {"ok": "ok", "alerta": "alerta", "perigo": "perigo", "info": "info"}
+    for tipo, titulo, texto in diagnostico_lavra(rot_atual, janelas, irrigacao):
+        html(f'<div class="rc-diag {titulos_tipo[tipo]}"><b>{titulo}</b>{texto}</div>')
 
-PLOT = dict(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="white",
-            font=dict(family="DM Sans", color=TINTA), margin=dict(l=10, r=10, t=50, b=10))
+    # Cartões das 3 estratégias
+    st.markdown("#### Três estratégias lado a lado")
+    cols = st.columns(3)
+    for col, (nome, e) in zip(cols, estrategias):
+        seq_txt = " → ".join(f"{CULTURAS[c]['emoji']} {c}" for c in e["seq"])
+        destaque = "destaque" if e["score"] == melhor_score else ""
+        with col:
+            html(f"""<div class="rc-estrategia {destaque}"><h4>{nome}</h4>
+            <div class="rc-nota">{e['score']:.0f}<small> / 100</small></div>
+            <div class="rc-seq">{seq_txt}</div>
+            <span class="rc-conf {e['conf']}">Confiança {e['conf'].lower()}</span></div>""")
+    st.caption("A pontuação mostra o quanto cada rotação serve as suas prioridades neste local. "
+               "Não é uma previsão de produção nem uma probabilidade de sucesso.")
 
-
-def ul(itens):
-    return "<ul>" + "".join(f"<li>{i}</li>" for i in itens) + "</ul>"
-
-
-def blocos(idx):
-    chaves, av = OPCOES[idx][2], AVAL[idx]
-    cult = [CULTURAS[c] for c in chaves]
-    evid, ben, lac, ris = [], [], [], []
-
-    for i, (c, ch) in enumerate(zip(CICLOS, cult)):
-        s = stats_ciclo[i]
-        if np.isnan(s["chuva"]):
-            evid.append(f"<b>{c['janela']} · {ch['nome']}</b>: sem dados no cache para este período.")
-        else:
-            evid.append(f"<b>{c['janela']} · {ch['nome']}</b>: chuva média {s['chuva']:.0f} mm, "
-                        f"umidade do solo {s['umid']:.2f}, máx. {s['tmax']:.0f} °C.")
-    evid.append(f"Tabela de culturas: azoto fixado {np.mean([c['nfix'] for c in cult]):.1f}/5 · "
-                f"protecção contra erosão {np.mean([c['erosao'] for c in cult]):.1f}/5 · "
-                f"tolerância à seca {np.mean([c['seca'] for c in cult]):.1f}/5.")
-
-    top = sorted(NOMES_CRIT, key=lambda k_: av["contrib"][k_], reverse=True)
-    for k_ in [t for t in top if pesos[t] > 0][:3]:
-        melhor = max(range(3), key=lambda i: criterios_cultura(chaves[i], i)[k_])
-        ben.append(f"{NOMES_CRIT[k_]}: nota média {av['media'][k_]:.1f}/5 (peso {pesos[k_]}). "
-                   f"Destaque: {cult[melhor]['nome']}.")
-    if not ben:
-        ben.append("Defina pelo menos uma prioridade para ver os benefícios.")
-
-    lac.append("Sem análise de solo da lavra (pH, matéria orgânica, textura).")
-    if not NDVI_REAL:
-        lac.append("NDVI real em falta — a série mostrada é um proxy da humidade do solo.")
-    if dist_km > 15:
-        lac.append(f"Clima de Huambo usado num ponto a {dist_km:.0f} km — pode diferir no seu local.")
-    lac.append("Preços de mercado locais e custos de insumos não entram na pontuação.")
-    lac.append("Notas das culturas ainda por confirmar com fontes locais (ver aba Culturas).")
-
-    for i, (c, ch) in enumerate(zip(CICLOS, cult)):
-        if i == 2 and not irrig and ch["seca"] <= 2 and chaves[i] != "pousio":
-            ris.append(f"{ch['nome']} no cacimbo sem rega: tolerância à seca {ch['seca']}/5 — risco alto de perda.")
-    if declive >= 8 and np.mean([c["erosao"] for c in cult]) < 3:
-        ris.append(f"Declive de {declive}% com protecção contra erosão baixa ({np.mean([c['erosao'] for c in cult]):.1f}/5).")
-    if meses_quentes >= 3 and any(c["calor"] <= 2 for c in cult):
-        ris.append("Culturas sensíveis ao calor num local com vários meses ≥ 30 °C.")
-    if cv_chuva > 0.8 and any(c["seca"] <= 2 for c in cult):
-        ris.append(f"Chuva muito irregular (CV {cv_chuva:.2f}) e culturas pouco tolerantes à seca.")
-    if len(set(chaves)) < len(chaves) and chaves[0] != "pousio":
-        ris.append("Repetição da mesma cultura: aumenta pragas, doenças e desgaste do solo.")
-    if sum(c["nfix"] <= 1 for c in cult) >= 2:
-        ris.append("Duas ou mais culturas que gastam azoto sem leguminosa de reposição.")
-    ris.append("<b>Validar com técnico local (extensionista / IIA) antes de decidir.</b>")
-    return evid, ben, lac, ris
-
-
-with aba1:
-    st.markdown("### Três estratégias para a sua lavra")
-    st.caption(f"{area_ha} ha · rotação actual: {atual_nome} · {'com' if irrig else 'sem'} rega · declive {declive}%")
-    cols = st.columns(3, gap="medium")
-    for i, col in enumerate(cols):
-        papel, nome, chaves = OPCOES[i]
-        sc = AVAL[i]["total"]
-        cor = [TERRA, VERDE, OCRE][i]
-        chips = "".join(
-            f'<div class="chip"><span>{CICLOS[j]["nome"].upper()} · {CICLOS[j]["janela"]}</span>'
-            f'{CULTURAS[ch]["e"]} <b>{CULTURAS[ch]["nome"]}</b></div>' for j, ch in enumerate(chaves))
-        tag = '<div class="star">★ Melhor para as suas prioridades</div><br>' if i == MELHOR else ""
-        col.markdown(
-            f'<div class="scard {"best" if i == MELHOR else ""}">{tag}'
-            f'<div class="role" style="color:{cor}">{papel}</div><div class="name">{nome}</div>'
-            f'<div class="score">{sc:.0f}<small> / 100</small></div>'
-            f'<div class="bar"><div style="width:{sc:.0f}%;background:{cor}"></div></div>'
-            f'<div class="muted">Fica em 1.º em <b>{ESTAB[i]:.0f}%</b> das simulações com pequenas '
-            f'variações nas prioridades.</div>{chips}</div>', unsafe_allow_html=True)
-
-    st.markdown(
-        f'<div class="muted" style="margin-top:.7rem">A pontuação mede o <b>ajuste às suas prioridades</b> '
-        f'(0–100). Não é uma probabilidade de colheita. Confiança geral: '
-        f'<span class="conf" style="background:{CONF_COR[0]};color:{CONF_COR[1]}">{CONF_NIVEL}</span></div>',
-        unsafe_allow_html=True)
-
-    st.write("")
-    g1, g2 = st.columns(2, gap="large")
-    nomes_curto = [f"{o[0].title()}: {o[1]}" for o in OPCOES]
+    nomes_curtos = [n.split(" · ")[0] for n, _ in estrategias]
+    cores = [COR_CINZA, COR_VERDE, COR_TERRA]
+    g1, g2 = st.columns(2)
     with g1:
-        crit = list(NOMES_CRIT)
-        fig = go.Figure()
-        for i in range(3):
-            v = [AVAL[i]["media"][c] for c in crit]
-            fig.add_trace(go.Scatterpolar(r=v + v[:1], theta=[NOMES_CRIT[c] for c in crit] + [NOMES_CRIT[crit[0]]],
-                                          name=OPCOES[i][0].title(), fill="toself", opacity=0.55,
-                                          line=dict(color=CORES_EST[i], width=2)))
-        fig.update_layout(title="Perfil de cada estratégia (nota 0–5)", polar=dict(radialaxis=dict(range=[0, 5])),
-                          legend=dict(orientation="h", y=-0.08), height=420, **PLOT)
-        grafico(fig)
+        radar = go.Figure()
+        nomes_k = list(CRITERIOS.values())
+        for cor, nome_c, (_, e) in zip(cores, nomes_curtos, estrategias):
+            valores = [e["medios"][k] for k in CRITERIOS]
+            radar.add_trace(go.Scatterpolar(r=valores + valores[:1], theta=nomes_k + nomes_k[:1], name=nome_c,
+                                            line=dict(color=cor, width=2)))
+        radar.update_layout(title="Pontos fortes de cada estratégia", polar=dict(radialaxis=dict(range=[0, 100])),
+                            legend=dict(orientation="h", y=-0.15))
+        mostrar(radar, 400)
+        st.markdown('<div class="rc-explica"><b>Como ler:</b> quanto mais a forma se estica para fora, melhor a estratégia '
+                    'nesse critério (0 a 100). Compare a forma verde e a terra com a cinzenta, que é a sua rotação atual.</div>',
+                    unsafe_allow_html=True)
     with g2:
-        fig = go.Figure()
-        paleta = [VERDE_ESC, FOLHA, "#8cc29d", OCRE, TERRA, "#6b8fb5", "#c9897a"]
-        for c, cor in zip(crit, paleta):
-            fig.add_trace(go.Bar(y=[o[0].title() for o in OPCOES][::-1], x=[a["contrib"][c] for a in AVAL][::-1],
-                                 name=NOMES_CRIT[c], orientation="h", marker_color=cor,
-                                 hovertemplate="%{x:.1f} pontos<extra>" + NOMES_CRIT[c] + "</extra>"))
-        fig.update_layout(barmode="stack", title="De onde vem cada pontuação (pontos)",
-                          xaxis=dict(range=[0, 100]), legend=dict(orientation="h", y=-0.25), height=420, **PLOT)
-        grafico(fig)
+        barras = pd.DataFrame({"Estratégia": nomes_curtos, "Pontuação": [e["score"] for _, e in estrategias]})
+        fig_b = px.bar(barras, x="Estratégia", y="Pontuação", text="Pontuação", color="Estratégia",
+                       color_discrete_sequence=cores, title="Pontuação total (0 a 100)")
+        fig_b.update_traces(texttemplate="%{text:.0f}", textposition="outside")
+        fig_b.update_layout(showlegend=False, yaxis_range=[0, 110], plot_bgcolor="white")
+        mostrar(fig_b, 400)
+        st.markdown('<div class="rc-explica"><b>Como ler:</b> a barra mais alta é a rotação que melhor serve as prioridades '
+                    'que escolheu. Mude as prioridades à esquerda e veja o resultado mudar.</div>', unsafe_allow_html=True)
 
-    st.markdown("### O que saber de cada estratégia")
-    esc = st.radio("Ver detalhe de:", range(3), horizontal=True,
-                   format_func=lambda i: f"{OPCOES[i][0].title()} · {OPCOES[i][1]}", label_visibility="collapsed")
-    ev, be, la, ri = blocos(esc)
-    r1 = st.columns(2, gap="medium")
-    r1[0].markdown(f'<div class="bloco b-evid"><h4>📊 Evidência</h4>{ul(ev)}</div>', unsafe_allow_html=True)
-    r1[1].markdown(f'<div class="bloco b-ben"><h4>✅ Benefícios</h4>{ul(be)}</div>', unsafe_allow_html=True)
-    st.write("")
-    r2 = st.columns(2, gap="medium")
-    r2[0].markdown(f'<div class="bloco b-lac"><h4>🔍 Lacunas de informação</h4>{ul(la)}</div>', unsafe_allow_html=True)
-    r2[1].markdown(f'<div class="bloco b-ris"><h4>⚠️ Riscos — validar com técnico local</h4>{ul(ri)}</div>', unsafe_allow_html=True)
+    st.markdown("#### Detalhe de cada estratégia")
+    sub = st.tabs(nomes_curtos)
+    for tab, (nome, e) in zip(sub, estrategias):
+        with tab:
+            cc = st.columns(3)
+            for col, jan, c in zip(cc, JANELAS, e["ciclos"]):
+                cult = CULTURAS[c["cultura"]]
+                with col:
+                    html(f"""<div class="rc-ciclo"><div class="fase">{jan['nome']} · {jan['periodo']} · {jan['fase']}</div>
+                    <div class="cultura">{cult['emoji']} {c['cultura']}</div>
+                    <p>Ciclo de cerca de {cult['ciclo']} dias. Ajuste ao clima: {c['fit'] * 100:.0f}%.</p></div>""")
+            st.markdown("<div style='height:.8rem'></div>", unsafe_allow_html=True)
+            ev, ben, lac, risc = montar_blocos(nome, e)
+            b1, b2 = st.columns(2)
+            b1.markdown(bloco("rc-evid", "Evidência", ev), unsafe_allow_html=True)
+            b2.markdown(bloco("rc-ben", "Benefícios", ben), unsafe_allow_html=True)
+            st.markdown("<div style='height:.6rem'></div>", unsafe_allow_html=True)
+            b3, b4 = st.columns(2)
+            b3.markdown(bloco("rc-lac", "Lacunas de informação", lac), unsafe_allow_html=True)
+            b4.markdown(bloco("rc-risc", "Riscos: validar com técnico local", risc), unsafe_allow_html=True)
+            st.caption(f"Confiança {e['conf'].lower()} porque: " + "; ".join(e["conf_motivos"] or ["os dados cobrem bem o local"]) + ".")
 
-    st.write("")
-    with st.expander("🎯 Porque é que a confiança é " + CONF_NIVEL.lower() + "?"):
-        for nome_i, got, tot, why in CONF_ITENS:
-            st.markdown(f"**{nome_i}** — {got:.0f}/{tot} pontos · {why}")
-            st.progress(got / tot)
-    with st.expander("🧮 Como a pontuação foi calculada (sem caixa preta)"):
-        p = pesos_efectivos()
-        linhas = []
-        for c in crit:
-            linha = {"Critério": NOMES_CRIT[c], "Peso (seu)": pesos[c], "Peso usado": round(p[c], 2)}
-            for i in range(3):
-                linha[f"Nota {OPCOES[i][0].title()}"] = round(AVAL[i]["media"][c], 2)
-                linha[f"Pontos {OPCOES[i][0].title()}"] = round(AVAL[i]["contrib"][c], 1)
-            linhas.append(linha)
-        tabela(pd.DataFrame(linhas), hide_index=True)
-        st.markdown(
-            "**Fórmula:** pontos = nota média (0–5) × peso ÷ soma dos pesos × 20. Total = soma dos pontos.  \n"
-            f"**Ajustes ao local:** (1) declive de {declive}% aumenta o peso da erosão em "
-            f"{min(declive, 20) / 40 * 100:.0f}%; (2) sem rega, no Ciclo 3 renda e mercado são multiplicados por "
-            "0,3 + 0,7 × (tolerância à seca − 1) ÷ 4; (3) “resistir a chuvas” mistura tolerância à seca e "
-            f"eficiência hídrica com peso {SITE['w_chuva']:.2f} na seca (vem da variabilidade da chuva).")
+    resumo = pd.DataFrame([{
+        "Estratégia": n, "Ciclo 1": e["seq"][0], "Ciclo 2": e["seq"][1], "Ciclo 3": e["seq"][2],
+        "Pontuação": round(e["score"], 1), "Confiança": e["conf"],
+        **{CRITERIOS[k]: round(v, 1) for k, v in e["medios"].items()},
+    } for n, e in estrategias])
+    st.download_button("Descarregar comparação (CSV)", resumo.to_csv(index=False).encode("utf-8"),
+                       "rotacampo_comparacao.csv", "text/csv")
 
-# ───────────────────────── CLIMA & SOLO ─────────────────────────
-with aba2:
-    st.markdown("### Clima e solo lidos para decidir")
-    st.caption("Dados de satélite agregados por mês e guardados em cache — a demonstração nunca depende de download ao vivo.")
-    a, b = st.columns(2, gap="large")
-    i_max, i_min = df["Chuva_mm"].idxmax(), df["Umidade_Solo_Idx"].idxmin()
-    with a:
-        fig = go.Figure(go.Bar(x=df["mes_label"], y=df["Chuva_mm"],
-                               marker_color=[VERDE if e == "Época das chuvas" else TERRA for e in df["Estacao"]],
-                               text=df["Chuva_mm"].round(1), textposition="outside"))
-        fig.add_annotation(x=df.loc[i_max, "mes_label"], y=df.loc[i_max, "Chuva_mm"], showarrow=True, ax=0, ay=-45,
-                           text=f"Pico: {df.loc[i_max, 'Chuva_mm']:.0f} mm", bgcolor="#e6f2ea", bordercolor=VERDE)
-        fig.update_layout(title="Calendário de chuvas (mm)", yaxis=dict(range=[0, df["Chuva_mm"].max() * 1.3]),
-                          showlegend=False, height=400, **PLOT)
-        grafico(fig)
-        st.markdown('<div class="explica"><b>Como ler:</b> barras <span style="color:#1f5c3f"><b>verdes</b></span> = '
-                    'época das chuvas, boa para semear sem rega. Barras <span style="color:#b5651d"><b>castanhas</b></span> = '
-                    'cacimbo: sem rega, prefira mandioca, feijão-frade ou cobertura.</div>', unsafe_allow_html=True)
-    with b:
-        fig = go.Figure()
-        fig.add_hrect(y0=0.5, y1=1.2, fillcolor="#e6f2ea", opacity=.6, line_width=0,
-                      annotation_text="Zona boa para germinar", annotation_position="top left")
-        fig.add_hrect(y0=-0.05, y1=0.25, fillcolor="#fbe3d6", opacity=.6, line_width=0,
-                      annotation_text="Solo seco", annotation_position="bottom left")
-        fig.add_trace(go.Scatter(x=df["mes_label"], y=df["Umidade_Solo_Idx"], mode="lines+markers", name="Umidade a 5 cm",
-                                 line=dict(color=VERDE, width=3)))
-        fig.add_trace(go.Scatter(x=df["mes_label"], y=df["Temp_Max_C"] / 30, mode="lines", name="Calor (Tmax ÷ 30 °C)",
-                                 line=dict(color=OCRE, width=2, dash="dash")))
-        fig.add_annotation(x=df.loc[i_min, "mes_label"], y=df.loc[i_min, "Umidade_Solo_Idx"], showarrow=True, ax=0, ay=-50,
-                           text="Mais seco", bgcolor="#fbe3d6", bordercolor=TERRA)
-        fig.update_layout(title="Água na raiz vs. calor", yaxis=dict(range=[-0.1, 1.35], title="0 = seco · 1 = húmido"),
-                          legend=dict(orientation="h", y=1.12), height=400, **PLOT)
-        grafico(fig)
-        st.markdown('<div class="explica"><b>Como ler:</b> a linha verde mostra se há água onde a semente germina. '
-                    'Quando o calor (tracejado) sobe e o solo está na faixa vermelha, evite semear: espere as primeiras chuvas.</div>',
+# ============================================================================
+# 10. ABA · CHUVA E SOLO
+# ============================================================================
+with aba_clima:
+    st.subheader("O que os satélites dizem sobre o seu clima")
+    cor_est = {"Época das chuvas": COR_VERDE, "Cacimbo (seca)": "#c77d2e"}
+    g1, g2 = st.columns(2)
+    with g1:
+        f1 = px.bar(df, x="mes_label", y="Chuva_mm", color="Estacao", text="Chuva_mm", title="Chuva por mês (mm)",
+                    color_discrete_map=cor_est, labels={"mes_label": "Mês", "Chuva_mm": "Chuva (mm)", "Estacao": "Estação"})
+        f1.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+        if df["Chuva_mm"].notna().any():
+            pico = df.loc[df["Chuva_mm"].idxmax()]
+            f1.add_annotation(x=pico["mes_label"], y=pico["Chuva_mm"], text=f"Pico: {pico['Chuva_mm']:.1f} mm",
+                              showarrow=True, arrowhead=2, ax=0, ay=-35, bgcolor="#e6efe8", bordercolor=COR_VERDE)
+        f1.update_layout(plot_bgcolor="white", yaxis_range=[0, max(float(df["Chuva_mm"].max()), 1) * 1.3],
+                         legend=dict(orientation="h", y=1.14))
+        mostrar(f1, 400)
+        n_seco = int((df["Estacao"] == "Cacimbo (seca)").sum())
+        st.markdown(f'<div class="rc-explica"><b>Como ler:</b> as barras verdes são meses de chuva, bons para semear sem rega. '
+                    f'As de cor laranja são meses de cacimbo ({n_seco} nos dados), em que só vale a pena semear com rega ou com '
+                    'culturas tolerantes à seca, como a mandioca. Os grupos foram separados por um algoritmo simples (k-means) '
+                    'que olha para a chuva e para a humidade do solo ao mesmo tempo.</div>',
                     unsafe_allow_html=True)
-    with st.expander("📄 Tabela de dados em cache"):
-        tabela(df[["validdate", "mes_label", "Estacao", "Temp_Max_C", "Chuva_mm", "Umidade_Solo_Idx"]],
-                hide_index=True)
-
-# ───────────────────────── NDVI & IA ─────────────────────────
-with aba3:
-    st.markdown("### O papel da IA: estação de crescimento e campo vazio")
-    if not NDVI_REAL:
-        st.markdown('<div class="nota">ℹ️ O cache ainda não tem NDVI de satélite. A curva abaixo é um <b>proxy</b> '
-                    '(a vegetação responde à humidade do solo com cerca de um mês de atraso). '
-                    'Quando adicionar uma coluna <code>ndvi</code> ao CSV, a app passa a usá-la automaticamente.</div>',
+    with g2:
+        f2 = go.Figure()
+        f2.add_hrect(y0=0.5, y1=1.3, fillcolor="#e6efe8", opacity=0.55, line_width=0,
+                     annotation_text="Boa para germinar", annotation_position="top left")
+        f2.add_hrect(y0=-0.1, y1=0.25, fillcolor="#f6e1da", opacity=0.55, line_width=0,
+                     annotation_text="Solo muito seco", annotation_position="bottom left")
+        f2.add_trace(go.Scatter(x=df["mes_label"], y=df["Umidade_Solo_Idx"], mode="lines+markers",
+                                name="Humidade do solo (5 cm)", line=dict(color=COR_VERDE, width=3)))
+        f2.add_trace(go.Scatter(x=df["mes_label"], y=df["Temp_Max_C"], mode="lines+markers", name="Temperatura máxima (°C)",
+                                yaxis="y2", line=dict(color=COR_TERRA, dash="dash", width=2)))
+        f2.update_layout(title="Humidade do solo e calor", plot_bgcolor="white",
+                         yaxis=dict(title="Índice (0 seco · 1 húmido)", range=[-0.1, 1.3]),
+                         yaxis2=dict(title="°C", overlaying="y", side="right", showgrid=False),
+                         legend=dict(orientation="h", y=1.14))
+        mostrar(f2, 400)
+        quente = df[df["Temp_Max_C"] >= 30]
+        txt = (f"Meses com 30 °C ou mais: {', '.join(quente['mes_label'])}. Evite semear nesses meses sem humidade no solo."
+               if len(quente) else "Nenhum mês chegou aos 30 °C nos dados.")
+        st.markdown(f'<div class="rc-explica"><b>Como ler:</b> a linha verde mostra se há água onde a semente germina '
+                    f'(acima de 0,5 é bom, abaixo de 0,25 o solo está muito seco). A linha tracejada mostra o calor. {txt} '
+                    'Dias de calor extremo ainda não estão no cache; usamos a temperatura máxima mensal como aproximação.</div>',
                     unsafe_allow_html=True)
-        st.write("")
-    nd = df["NDVI"]
-    lo, hi = nd.min(), nd.max()
-    em_crescimento = nd >= lo + 0.5 * (hi - lo)
-    vazio = nd <= lo + 0.25 * (hi - lo)
-    c1, c2 = st.columns([1.5, 1], gap="large")
-    with c1:
-        fig = go.Figure(go.Scatter(x=df["mes_label"], y=nd, mode="lines+markers", fill="tozeroy",
-                                   line=dict(color=FOLHA, width=3), fillcolor="rgba(63,143,95,.18)",
-                                   name="NDVI" if NDVI_REAL else "NDVI (proxy)"))
-        fig.add_hline(y=lo + 0.5 * (hi - lo), line_dash="dot", line_color=VERDE,
-                      annotation_text="início/fim da estação de crescimento")
-        fig.add_hline(y=lo + 0.25 * (hi - lo), line_dash="dot", line_color=TERRA,
-                      annotation_text="campo vazio", annotation_position="bottom right")
-        fig.update_layout(title="Ciclo anual de vegetação", yaxis=dict(range=[0, 1], title="NDVI"), height=380, **PLOT)
-        grafico(fig)
-    with c2:
-        X = df[["Umidade_Solo_Idx", "Chuva_mm", "Temp_Max_C"]].to_numpy(float)
-        Xz = (X - X.mean(0)) / np.where(X.std(0) == 0, 1, X.std(0))
-        lab, cent = kmeans(Xz, 3)
-        ordem = np.argsort(cent[:, 0])
-        nomes_cl = {ordem[0]: "Seco", ordem[1]: "Transição", ordem[2]: "Chuvoso"}
-        df["Grupo"] = [nomes_cl[l] for l in lab]
-        cont = df["Grupo"].value_counts().reindex(["Seco", "Transição", "Chuvoso"]).fillna(0)
-        fig = go.Figure(go.Bar(x=cont.index, y=cont.values, marker_color=[TERRA, OCRE, VERDE], text=cont.values.astype(int),
-                               textposition="outside"))
-        fig.update_layout(title="Meses agrupados pelo clima (k-means)", yaxis=dict(range=[0, cont.max() + 2]),
-                          height=380, **PLOT)
-        grafico(fig)
 
-    ini = df.loc[em_crescimento, "mes_label"]
-    st.markdown('<div class="explica"><b>Em palavras simples:</b> '
-                f'a estação de crescimento detectada tem <b>{int(em_crescimento.sum())} meses</b>'
-                f'{" (de " + ini.iloc[0] + " a " + ini.iloc[-1] + ")" if len(ini) else ""}; '
-                f'o campo está “vazio” em <b>{int(vazio.sum())} meses</b>. '
-                'O agrupamento junta meses parecidos (humidade, chuva, calor) sem regras manuais.</div>',
-                unsafe_allow_html=True)
+    st.markdown("#### Mês a mês: quando semear")
+    tabela_meses = clima_mes.reset_index().rename(columns={
+        "mes": "Mês", "Chuva_mm": "Chuva (mm)", "Umidade_Solo_Idx": "Humidade do solo", "Temp_Max_C": "Máxima (°C)"})
+    tabela_meses["Mês"] = tabela_meses["Mês"].apply(lambda m: MESES_PT[int(m) - 1])
+    tabela_meses["Estado do solo"] = tabela_meses["Humidade do solo"].apply(classe_humidade)
+    tabela_meses["Conselho"] = tabela_meses["Humidade do solo"].apply(
+        lambda v: "sem dado" if pd.isna(v) else "Bom para semear" if v >= 0.5
+        else "Semear só culturas tolerantes" if v >= 0.25 else "Evitar semear sem rega")
+    tabela(tabela_meses.round(2))
 
-    anos = df.groupby("ano").agg(chuva=("Chuva_mm", "sum"), n=("mes", "nunique"))
-    anos = anos[anos["n"] >= 10]
-    if len(anos) >= 4:
-        lab_a, cent_a = kmeans(((anos[["chuva"]] - anos["chuva"].mean()) / anos["chuva"].std()).to_numpy(), 2)
-        seco = int(np.argmin(cent_a[:, 0]))
-        anos["Tipo"] = ["Ano seco" if l == seco else "Ano normal" for l in lab_a]
-        st.write("")
-        st.markdown("**Anos secos vs. normais**")
-        st.dataframe(anos[["chuva", "Tipo"]].round(0))
+    st.markdown("#### NDVI (verde da vegetação)")
+    if COL_NDVI:
+        f3 = px.line(df, x="mes_label", y=COL_NDVI, markers=True, title="Ciclo anual do NDVI",
+                     labels={"mes_label": "Mês", COL_NDVI: "NDVI"})
+        f3.update_traces(line_color=COR_VERDE)
+        f3.update_layout(plot_bgcolor="white")
+        mostrar(f3, 360)
+        st.markdown('<div class="rc-explica"><b>Como ler:</b> o NDVI sobe quando há plantas verdes e desce quando o campo está '
+                    'vazio ou seco. Os meses com valores baixos indicam fora da estação de crescimento.</div>', unsafe_allow_html=True)
     else:
-        st.caption("O agrupamento de anos secos e normais precisa de 4 ou mais anos completos no cache. "
-                   "O código já está pronto: basta alargar o CSV.")
+        st.info("O cache ainda não tem NDVI. Quando for adicionado (uma coluna com 'ndvi' no nome), este gráfico aparece "
+                "sozinho e permite detetar a estação de crescimento e campos vazios.")
 
-# ───────────────────────── CULTURAS ─────────────────────────
-with aba4:
-    st.markdown("### Tabela de culturas do projecto")
-    st.markdown('<div class="nota">Notas de 1 a 5 (5 = melhor). Foram feitas pela equipa e <b>ainda não estão validadas</b>. '
-                'Confirme culturas, épocas de plantio e dados de solo com fontes locais (IIA, extensionistas, produtores).</div>',
-                unsafe_allow_html=True)
-    st.write("")
-    rot = {"agua": "Eficiência hídrica", "nfix": "Fixação de azoto", "raizes": "Raízes/estrutura do solo",
-           "erosao": "Protecção contra erosão", "seca": "Tolerância à seca", "calor": "Tolerância ao calor",
-           "mercado": "Mercado", "renda": "Renda"}
-    tab = pd.DataFrame([{"Cultura": f"{c['e']} {c['nome']}", **{rot[k_]: c[k_] for k_ in rot},
-                         "Ciclo (dias)": c["dias"], "Precisa rega": "Sim" if c["rega"] else "Não",
-                         "Fonte": c["fonte"], "Validada": "Não"} for c in CULTURAS.values()])
-    z = tab[[rot[k_] for k_ in rot]].to_numpy()
-    fig = go.Figure(go.Heatmap(z=z, x=list(rot.values()), y=tab["Cultura"], zmin=1, zmax=5, text=z, texttemplate="%{text}",
-                               colorscale=[[0, "#fbe3d6"], [0.5, "#fff1cc"], [1, "#3f8f5f"]], showscale=False))
-    fig.update_layout(height=470, yaxis=dict(autorange="reversed"), xaxis=dict(side="top"), **PLOT)
-    grafico(fig)
-    with st.expander("Ver tabela completa com fontes"):
-        tabela(tab, hide_index=True)
+    with st.expander("Ver todos os dados do cache"):
+        colunas = ["validdate", "mes_label", "Estacao", "Temp_Max_C", "Chuva_mm", "Umidade_Solo_Idx"]
+        tabela(df[colunas])
 
-# ───────────────────────── FORMAÇÃO & IMPACTO ─────────────────────────
-with aba5:
-    st.markdown("### Mais do que uma app: conhecimento ao alcance do campo")
-    st.markdown("O AngoPlanta quer aproximar a ciência e a tecnologia de agricultores, empreendedores e trabalhadores rurais, "
-                "com formação simples e prática em cada passo da campanha.")
-    st.markdown(f'<div class="kpi" style="margin:.6rem 0 1rem"><div class="l">🎯 Meta 2027–2028</div>'
-                f'<div class="v">+1 000 agricultores</div><div class="d">com culturas e actividades diversas a usar '
-                f'a plataforma, a cobrir todas as culturas e a resolver problemas reais com tecnologia moderna.</div></div>',
-                unsafe_allow_html=True)
-    mods = [("01", "Ler o calendário de chuvas", "Quando semear e quando esperar."),
-            ("02", "Rotação de culturas", "Porque alternar cereais, leguminosas e tubérculos."),
-            ("03", "Proteger o solo", "Cobertura, curvas de nível e menos erosão."),
-            ("04", "Água e irrigação", "Regar menos e melhor no cacimbo."),
-            ("05", "Pragas: sinais de alerta", "Reconhecer cedo e pedir ajuda técnica."),
-            ("06", "Colheita e mercado", "Quando colher e como vender melhor.")]
-    cm = st.columns(3, gap="medium")
-    for i, (n, t, d) in enumerate(mods):
-        cm[i % 3].markdown(f'<div class="modulo"><div class="n">{n}</div><b>{t}</b><br>'
-                           f'<span class="muted">{d}</span></div>', unsafe_allow_html=True)
-        if i % 3 == 2 and i < 5:
-            cm = st.columns(3, gap="medium")
-    st.write("")
-    st.markdown("**No horizonte do projecto:** monitorizar solo e humidade por satélite, controlo de irrigação, "
-                "prevenção de pragas e apoio à colheita. Os módulos acima são o plano de formação; "
-                "ainda não estão publicados.")
+# ============================================================================
+# 11. ABA · CULTURAS
+# ============================================================================
+with aba_cult:
+    st.subheader("Tabela de culturas")
+    st.warning("Estes valores são iniciais, escritos pela equipa. Ainda têm de ser confirmados com técnicos e fontes locais "
+               "(épocas de plantio, ciclo e dados do solo) antes de serem usados em decisões reais.")
+    tab = pd.DataFrame([{
+        "Cultura": f"{c['emoji']} {n}", "Tipo": c["grupo"], "Poupa água (1–5)": c["agua"], "Fixa azoto (1–5)": c["n"],
+        "Exige azoto (1–5)": c["exig_n"], "Estrutura do solo (1–5)": c["raizes"], "Proteção da erosão (1–5)": c["erosao"],
+        "Ciclo (dias)": c["ciclo"], "Tolerância à seca (1–5)": c["seca"], "Mercado (1–5)": c["mercado"], "Fonte": c["fonte"],
+    } for n, c in CULTURAS.items()])
+    tabela(tab)
+    st.caption("Nota: 5 é o melhor valor, exceto em «Exige azoto», onde 5 significa que a cultura gasta muito azoto.")
 
-# ───────────────────────── MÉTODO ─────────────────────────
-with aba6:
-    st.markdown("### Como o RotaCampo chega aos resultados")
+# ============================================================================
+# 12. ABA · COMO FUNCIONA
+# ============================================================================
+with aba_info:
+    st.subheader("Como o RotaCampo chega aos resultados")
     st.markdown("""
-1. **Pipeline de dados:** descarrega uma área pequena, agrega por mês e guarda em cache local (`cache_huambo.csv`).
-2. **Indicadores:** chuva e variabilidade, umidade do solo, ciclo anual de NDVI, meses de calor e declive.
-3. **Tabela de culturas:** feita pela equipa, com fonte por cultura (por validar).
-4. **Motor de pontuação:** cruza os indicadores do local com a tabela, ponderado pelas suas prioridades. Todas as contas são mostradas.
-5. **Incerteza:** nível de confiança por componente e estabilidade do ranking em 400 simulações.
-6. **IA simples:** proxy/série de NDVI para estação de crescimento e campo vazio; k-means para agrupar meses (e anos, quando houver dados).
-7. **Interface:** Streamlit, mapa com folium e gráficos com plotly.
-""")
-    st.markdown('<div class="nota"><b>Limites:</b> a pontuação é um apoio à decisão, não uma previsão de colheita. '
-                'Não substitui análise de solo nem aconselhamento técnico no terreno.</div>', unsafe_allow_html=True)
+**1. Dados em cache.** Os dados de satélite (chuva, humidade do solo, temperatura) são descarregados antes e guardados em
+`cache_huambo.csv`. A demonstração nunca depende de internet para os dados.
 
-st.write("")
-st.caption("RotaCampo · AngoPlanta · NASA Space Apps Challenge")
+**2. Indicadores por ciclo.** Para cada ciclo (Out–Jan, Fev–Mai, Jun–Set) calculamos a chuva, a humidade do solo e o calor médios.
+
+**3. Ajuste da cultura.** Cada cultura recebe de 0 a 100% em cada ciclo, conforme a sua tolerância à seca e ao calor e a duração do seu ciclo.
+
+**4. Pontuação.** Em cada ciclo: `pontuação = média ponderada dos critérios × (0,5 + 0,5 × ajuste)`. Os pesos são as prioridades que
+escolheu. Depois somamos bónus ou penalizações de rotação: leguminosa depois de não leguminosa (+6 pontos), repetir a cultura (−12 pontos)
+e diversidade (+3 pontos por cultura diferente).
+
+**5. Estratégias.** Testamos as 125 combinações de 3 culturas. Mostramos a sua rotação atual, a melhor alternativa e uma segunda
+alternativa bem diferente.
+
+**6. Confiança.** Depende da cobertura dos dados, da distância ao ponto com dados, da existência de NDVI, da folga entre estratégias e de a
+tabela de culturas estar confirmada. Enquanto não estiver, a confiança nunca passa de «média».
+""")
+    st.markdown("#### Papel da IA")
+    st.markdown("Hoje: agrupamento (k-means) de meses de chuva e de cacimbo. Próximo passo: séries temporais do NDVI para detetar a estação "
+                "de crescimento e campos vazios, e agrupar anos secos e normais quando houver vários anos no cache.")
+    st.markdown("#### Meta social")
+    st.markdown("Chegar a mais de 1000 agricultores até 2027–2028, com formação agrícola e tecnologia acessível, do Planalto Central "
+                "para outras regiões e culturas.")
