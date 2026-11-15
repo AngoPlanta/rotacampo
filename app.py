@@ -320,16 +320,14 @@ df, USA_DEMO = carregar_dados()
 df = df.copy()
 df["Estacao"] = agrupar_estacoes(df)
 
-# Detetar a coluna NDVI no DataFrame, limpando quaisquer espaços em branco
-    COL_NDVI = next((c for c in df.columns if "ndvi" in str(c).lower().strip()), None)
-    if COL_NDVI:
-        if COL_NDVI != "ndvi":
-            df = df.rename(columns={COL_NDVI: "ndvi"})
-        COL_NDVI = "ndvi"
-        # Substitui a vírgula por ponto para aceitar o formato decimal do CSV
-        df[COL_NDVI] = pd.to_numeric(df[COL_NDVI].astype(str).str.replace(",", "."), errors="coerce")
-        if df[COL_NDVI].isna().all():
-            COL_NDVI = None
+COL_NDVI = next((c for c in df.columns if "ndvi" in str(c).lower().strip()), None)
+if COL_NDVI:
+    if COL_NDVI != "ndvi":
+        df = df.rename(columns={COL_NDVI: "ndvi"})
+    COL_NDVI = "ndvi"
+    df[COL_NDVI] = pd.to_numeric(df[COL_NDVI].astype(str).str.replace(",", "."), errors="coerce")
+    if df[COL_NDVI].isna().all():
+        COL_NDVI = None
 
 clima_mes = df.groupby("mes")[["Chuva_mm", "Umidade_Solo_Idx", "Temp_Max_C"]].mean().reindex(range(1, 13))
 
